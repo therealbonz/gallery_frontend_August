@@ -180,17 +180,23 @@ export default function WallpaperView() {
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
     scene.add(ambientLight);
 
-    const keyLight = new THREE.DirectionalLight(0xffffff, 1.8);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.6);
     keyLight.position.set(5, 6, 7);
     scene.add(keyLight);
 
-    const fillLight = new THREE.DirectionalLight(0x60a5fa, 1.0);
+    const fillLight = new THREE.DirectionalLight(0x60a5fa, 0.9);
     fillLight.position.set(-6, -3, -4);
     scene.add(fillLight);
 
-    const accentLight = new THREE.PointLight(0xa855f7, 2.5, 20);
-    accentLight.position.set(0, 4, 3);
-    scene.add(accentLight);
+    // Dynamic Cursor Spotlight: casts real-time specular glints as mouse moves
+    const cursorLight = new THREE.PointLight(0x38bdf8, 3.5, 18);
+    cursorLight.position.set(0, 0, 3.5);
+    scene.add(cursorLight);
+
+    // Subtle Cyberpunk Horizon Grid Floor
+    const grid = new THREE.GridHelper(26, 26, 0x0ea5e9, 0x1e293b);
+    grid.position.y = -2.5;
+    scene.add(grid);
 
     // Initial placeholder materials
     const initialMaterials = [];
@@ -208,7 +214,7 @@ export default function WallpaperView() {
     materialsRef.current = initialMaterials;
 
     // Cube Geometry
-    const geometry = new THREE.BoxGeometry(2.3, 2.3, 2.3);
+    const geometry = new THREE.BoxGeometry(2.2, 2.2, 2.2);
     const cube = new THREE.Mesh(geometry, initialMaterials);
     scene.add(cube);
     cubeRef.current = cube;
@@ -232,6 +238,10 @@ export default function WallpaperView() {
     const particles = new THREE.Points(particleGeo, particleMat);
     scene.add(particles);
 
+    // Momentum velocity refs
+    let momentumX = 0;
+    let momentumY = 0;
+
     // Animation loop
     const clock = new THREE.Clock();
     const animate = () => {
@@ -239,7 +249,13 @@ export default function WallpaperView() {
       const delta = clock.getDelta();
 
       if (cubeRef.current) {
-        if (isSpinning && !isDraggingRef.current) {
+        // Apply physics momentum from fling drag
+        if (Math.abs(momentumX) > 0.0001 || Math.abs(momentumY) > 0.0001) {
+          cubeRef.current.rotation.y += momentumY;
+          cubeRef.current.rotation.x += momentumX;
+          momentumX *= 0.92;
+          momentumY *= 0.92;
+        } else if (isSpinning && !isDraggingRef.current) {
           if (monitorIndex === 0) {
             cubeRef.current.rotation.y += delta * 0.35 * spinSpeed;
             cubeRef.current.rotation.x += delta * 0.15 * spinSpeed;
@@ -252,9 +268,12 @@ export default function WallpaperView() {
           }
         }
 
-        // Mouse Parallax
+        // Mouse Parallax & Dynamic Light tracking
         cubeRef.current.position.x += (mouseParallaxRef.current.x * 0.25 - cubeRef.current.position.x) * 0.05;
         cubeRef.current.position.y += (mouseParallaxRef.current.y * 0.25 - cubeRef.current.position.y) * 0.05;
+
+        cursorLight.position.x += (mouseParallaxRef.current.x * 4.0 - cursorLight.position.x) * 0.08;
+        cursorLight.position.y += (mouseParallaxRef.current.y * 3.0 - cursorLight.position.y) * 0.08;
       }
 
       // Slowly rotate particle field
