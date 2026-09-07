@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { api } from '../services/api';
-import { RefreshCw, Sparkles, Wifi } from 'lucide-react';
+import { RefreshCw, Sparkles, Wifi, CloudRain, Snowflake, Cloud, Sun, Music, Mic, VolumeX, Play } from 'lucide-react';
+import { create3DWeather, createGlassRainOverlay } from '../utils/WeatherSystem';
+import { AudioVisualizerManager, createEqualizerRing } from '../utils/AudioVisualizer';
+import { fetchLiveWeather, setStoredWeatherSetting, WEATHER_CONDITIONS, getStoredWeatherSetting } from '../utils/weatherService';
 
 const FACE_NAMES = ['Right', 'Left', 'Top', 'Bottom', 'Front', 'Back'];
 const FACE_COLORS = ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4'];
@@ -81,6 +84,61 @@ export default function WallpaperView() {
   const materialsRef = useRef([]);
   const videoElementsRef = useRef([]);
   const animFrameIdRef = useRef(null);
+
+  // Weather & Audio Visualizer state
+  const [weatherCondition, setWeatherCondition] = useState(getStoredWeatherSetting());
+  const [audioMode, setAudioMode] = useState('off'); // 'off' | 'beat' | 'mic'
+
+  const weatherConditionRef = useRef(weatherCondition);
+  const weather3DRef = useRef(null);
+  const equalizerRingRef = useRef(null);
+  const audioVisRef = useRef(null);
+  const glassCanvasRef = useRef(null);
+  const glassOverlayRef = useRef(null);
+
+  useEffect(() => {
+    weatherConditionRef.current = weatherCondition;
+    if (weatherCondition === 'rain') {
+      glassOverlayRef.current?.start();
+    } else {
+      glassOverlayRef.current?.stop();
+    }
+  }, [weatherCondition]);
+
+  useEffect(() => {
+    fetchLiveWeather().then((res) => {
+      if (res && res.condition) {
+        setWeatherCondition(res.condition);
+      }
+    });
+  }, []);
+
+  const handleToggleAudio = useCallback(async () => {
+    if (!audioVisRef.current) return;
+    if (audioMode === 'off') {
+      audioVisRef.current.startDemoBeat();
+      setAudioMode('beat');
+    } else if (audioMode === 'beat') {
+      const ok = await audioVisRef.current.startMic();
+      if (ok) {
+        setAudioMode('mic');
+      } else {
+        audioVisRef.current.stop();
+        setAudioMode('off');
+      }
+    } else {
+      audioVisRef.current.stop();
+      setAudioMode('off');
+    }
+  }, [audioMode]);
+
+  const handleCycleWeather = useCallback(() => {
+    const list = [WEATHER_CONDITIONS.RAIN, WEATHER_CONDITIONS.SNOW, WEATHER_CONDITIONS.CLOUDY, WEATHER_CONDITIONS.CLEAR];
+    const curIdx = list.indexOf(weatherCondition);
+    const nextCond = list[(curIdx + 1) % list.length];
+    setWeatherCondition(nextCond);
+    setStoredWeatherSetting(nextCond);
+  }, [weatherCondition]);
 
   // Drag interaction refs
   const isDraggingRef = useRef(false);
@@ -251,12 +309,32 @@ export default function WallpaperView() {
             y: -(clientY / window.innerHeight) * 2 + 1
           };
         }
+      } else if (action === 'setWeather' && typeof event.data.weather === 'string') {
+        const w = event.data.weather.toLowerCase();
+        setWeatherCondition(w);
+        setStoredWeatherSetting(w);
+      } else if (action === 'toggleAudio') {
+        handleToggleAudio();
+      } else if (action === 'setAudioMode' && typeof event.data.mode === 'string') {
+        const m = event.data.mode.toLowerCase();
+        if (m === 'beat' && audioVisRef.current) {
+          audioVisRef.current.startDemoBeat();
+          setAudioMode('beat');
+        } else if (m === 'mic' && audioVisRef.current) {
+          audioVisRef.current.startMic().then((ok) => {
+            if (ok) setAudioMode('mic');
+            else setAudioMode('off');
+          });
+        } else {
+          audioVisRef.current?.stop();
+          setAudioMode('off');
+        }
       }
     };
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [fetchPhotos]);
+  }, [fetchPhotos, handleToggleAudio]);
 
   // 2. Initialize Three.js Scene
   useEffect(() => {
@@ -305,6 +383,29 @@ export default function WallpaperView() {
     const grid = new THREE.GridHelper(26, 26, 0x0ea5e9, 0x1e293b);
     grid.position.y = -2.5;
     scene.add(grid);
+
+    // 3D Weather System (Rain streaks, splashes, snow, clouds)
+    const weather3D = create3DWeather(scene);
+    weather3DRef.current = weather3D;
+
+    // 3D Audio Equalizer Ring on Floor Grid
+    const eqRing = createEqualizerRing(scene);
+    equalizerRingRef.current = eqRing;
+
+    // Audio Visualizer Manager
+    if (!audioVisRef.current) {
+      audioVisRef.current = new AudioVisualizerManager();
+    }
+
+    // 2D Glass Rain Droplets Overlay
+    if (glassCanvasRef.current) {
+      const glass = createGlassRainOverlay(glassCanvasRef.current);
+      glassOverlayRef.current = glass;
+      glass.resize(width, height);
+      if (weatherConditionRef.current === 'rain') {
+        glass.start();
+      }
+    }
 
     // Initial placeholder materials
     const initialMaterials = [];
@@ -362,6 +463,35 @@ export default function WallpaperView() {
     const animate = () => {
       animFrameIdRef.current = requestAnimationFrame(animate);
       const delta = clock.getDelta();
+
+      // Audio Visualizer updates
+      if (audioVisRef.current) {
+        audioVisRef.current.update();
+
+        // Scale punch on bass
+        const bassVal = audioVisRef.current.bass;
+        const targetScale = 1.0 + bassVal * 0.16;
+        if (cubeRef.current) {
+          cubeRef.current.scale.set(targetScale, targetScale, targetScale);
+        }
+
+        // Modulate cursor spotlight and fill light with music
+        const midVal = audioVisRef.current.mid;
+        cursorLight.intensity = 3.5 + midVal * 4.5;
+        fillLight.intensity = 0.9 + midVal * 1.2;
+
+        if (equalizerRingRef.current) {
+          equalizerRingRef.current.update(
+            audioVisRef.current.frequencyBands,
+            audioVisRef.current.mode !== 'off'
+          );
+        }
+      }
+
+      // Weather 3D updates
+      if (weather3DRef.current) {
+        weather3DRef.current.update(delta, weatherConditionRef.current);
+      }
 
       if (cubeRef.current) {
         // Dynamic Face Cycling: swap textures when a face is turned away to the back
@@ -457,6 +587,9 @@ export default function WallpaperView() {
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
+      if (glassOverlayRef.current) {
+        glassOverlayRef.current.resize(w, h);
+      }
     };
     window.addEventListener('resize', handleResize);
 
@@ -469,6 +602,10 @@ export default function WallpaperView() {
       if (container && renderer.domElement) {
         container.removeChild(renderer.domElement);
       }
+      if (weather3DRef.current) weather3DRef.current.dispose();
+      if (equalizerRingRef.current) equalizerRingRef.current.dispose();
+      if (audioVisRef.current) audioVisRef.current.stop();
+      if (glassOverlayRef.current) glassOverlayRef.current.stop();
       renderer.dispose();
     };
   }, [spinSpeed, isSpinning, monitorIndex, swapFacePhoto]);
@@ -572,6 +709,91 @@ export default function WallpaperView() {
       }}
     >
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
+
+      {/* 2D Glass Rain Droplets Overlay (Condensation & Window Trickles) */}
+      <canvas
+        ref={glassCanvasRef}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+          zIndex: 4
+        }}
+      />
+
+      {/* Floating Weather & Audio Visualizer Badges */}
+      <div
+        style={{
+          position: 'absolute',
+          top: '20px',
+          right: '20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          zIndex: 10,
+          pointerEvents: 'auto'
+        }}
+      >
+        {/* Weather Cycle Button */}
+        <button
+          onClick={handleCycleWeather}
+          title={`Weather: ${weatherCondition.toUpperCase()} (Click to toggle)`}
+          style={{
+            padding: '7px 14px',
+            background: 'rgba(15, 23, 42, 0.75)',
+            backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(255, 255, 255, 0.15)',
+            borderRadius: '20px',
+            color: '#f8fafc',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            fontSize: '12px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
+            transition: 'all 0.2s ease'
+          }}
+        >
+          {weatherCondition === 'rain' && <CloudRain size={15} color="#38bdf8" />}
+          {weatherCondition === 'snow' && <Snowflake size={15} color="#bae6fd" />}
+          {weatherCondition === 'cloudy' && <Cloud size={15} color="#cbd5e1" />}
+          {weatherCondition === 'clear' && <Sun size={15} color="#f59e0b" />}
+          <span style={{ textTransform: 'capitalize' }}>{weatherCondition}</span>
+        </button>
+
+        {/* Audio Visualizer Button */}
+        <button
+          onClick={handleToggleAudio}
+          title={`Music Reactive Visualizer: ${audioMode.toUpperCase()} (Click to toggle)`}
+          style={{
+            padding: '7px 14px',
+            background: audioMode !== 'off' ? 'rgba(13, 148, 136, 0.35)' : 'rgba(15, 23, 42, 0.75)',
+            backdropFilter: 'blur(12px)',
+            border: audioMode !== 'off' ? '1px solid #14b8a6' : '1px solid rgba(255, 255, 255, 0.15)',
+            borderRadius: '20px',
+            color: audioMode !== 'off' ? '#2dd4bf' : '#f8fafc',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            fontSize: '12px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
+            transition: 'all 0.2s ease'
+          }}
+        >
+          {audioMode === 'off' && <Music size={15} />}
+          {audioMode === 'beat' && <Play size={15} className="spin-anim" />}
+          {audioMode === 'mic' && <Mic size={15} color="#2dd4bf" />}
+          <span>
+            {audioMode === 'off' ? 'Visualizer: Off' : audioMode === 'beat' ? 'Visualizer: Beat' : 'Visualizer: Mic'}
+          </span>
+        </button>
+      </div>
 
       {!isMinimal && (
         <div
