@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, LogIn, UserPlus, LogOut, User, Sparkles, Monitor, Smartphone } from 'lucide-react';
+import { Box, LogIn, UserPlus, LogOut, User, Sparkles, Monitor, Smartphone, Download } from 'lucide-react';
 
 export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
   return (
@@ -21,6 +21,15 @@ export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
         </a>
 
         <div className="d-flex align-items-center gap-2">
+          <a
+            href="/api/v1/download/exe"
+            download="My3DCubeWallpaper.exe"
+            className="btn btn-sm btn-outline-light d-flex align-items-center gap-1 rounded-pill px-3"
+            title="Download Windows Desktop Live Wallpaper App (.exe)"
+          >
+            <Download size={15} />
+            <span className="d-none d-sm-inline">Windows App (.exe)</span>
+          </a>
           <a
             href="/api/v1/download/apk"
             download="My3DCube.apk"

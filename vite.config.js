@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import fs from 'node:fs'
 import path from 'node:path'
 
-function apkServePlugin() {
+function binaryServePlugin() {
   const handler = (req, res, next) => {
     if (req.url && (req.url === '/My3DCube.apk' || req.url.startsWith('/My3DCube.apk?'))) {
       const candidates = [
@@ -23,11 +23,29 @@ function apkServePlugin() {
         }
       }
     }
+    if (req.url && (req.url === '/My3DCubeWallpaper.exe' || req.url.startsWith('/My3DCubeWallpaper.exe?'))) {
+      const candidates = [
+        path.resolve('dist/My3DCubeWallpaper.exe'),
+        path.resolve('public/My3DCubeWallpaper.exe')
+      ];
+      for (const filePath of candidates) {
+        if (fs.existsSync(filePath)) {
+          const stat = fs.statSync(filePath);
+          res.writeHead(200, {
+            'Content-Type': 'application/vnd.microsoft.portable-executable',
+            'Content-Disposition': 'attachment; filename="My3DCubeWallpaper.exe"',
+            'Content-Length': stat.size,
+            'Cache-Control': 'no-cache'
+          });
+          return fs.createReadStream(filePath).pipe(res);
+        }
+      }
+    }
     next();
   };
 
   return {
-    name: 'apk-serve-plugin',
+    name: 'binary-serve-plugin',
     configureServer(server) {
       server.middlewares.use(handler);
     },
@@ -39,7 +57,7 @@ function apkServePlugin() {
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react(), apkServePlugin()],
+  plugins: [react(), binaryServePlugin()],
   server: {
     port: 5173,
     host: true,
