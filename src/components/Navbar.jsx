@@ -22,13 +22,13 @@ export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
 
         <div className="d-flex align-items-center gap-2">
           <a
-            href="/My3DCube.apk"
+            href="/api/v1/download/apk"
             download="My3DCube.apk"
             className="btn btn-sm btn-outline-light d-flex align-items-center gap-1 rounded-pill px-3"
             title="Download Android App APK (Live Wallpaper + Phone Photo Uploads)"
           >
             <Smartphone size={15} />
-            <span className="d-none d-sm-inline">Android App</span>
+            <span className="d-none d-sm-inline">Android App (.apk)</span>
           </a>
           <a
             href="/?wallpaper=true"
