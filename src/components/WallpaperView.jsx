@@ -98,11 +98,7 @@ export default function WallpaperView() {
 
   useEffect(() => {
     weatherConditionRef.current = weatherCondition;
-    if (weatherCondition === 'rain') {
-      glassOverlayRef.current?.start();
-    } else {
-      glassOverlayRef.current?.stop();
-    }
+    glassOverlayRef.current?.setRainEnabled(weatherCondition === 'rain');
   }, [weatherCondition]);
 
   useEffect(() => {
@@ -329,6 +325,10 @@ export default function WallpaperView() {
           audioVisRef.current?.stop();
           setAudioMode('off');
         }
+      } else if (action === 'screenCrack') {
+        const cx = typeof event.data.clientX === 'number' ? event.data.clientX : window.innerWidth / 2;
+        const cy = typeof event.data.clientY === 'number' ? event.data.clientY : window.innerHeight / 2;
+        glassOverlayRef.current?.addCrack(cx, cy);
       }
     };
 
@@ -402,9 +402,7 @@ export default function WallpaperView() {
       const glass = createGlassRainOverlay(glassCanvasRef.current);
       glassOverlayRef.current = glass;
       glass.resize(width, height);
-      if (weatherConditionRef.current === 'rain') {
-        glass.start();
-      }
+      glass.setRainEnabled(weatherConditionRef.current === 'rain');
     }
 
     // Initial placeholder materials
@@ -551,6 +549,7 @@ export default function WallpaperView() {
       isDraggingRef.current = true;
       previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
       momentumVelocityRef.current = { x: 0, y: 0 };
+      glassOverlayRef.current?.addCrack(e.clientX, e.clientY);
     };
 
     const onMouseMove = (e) => {

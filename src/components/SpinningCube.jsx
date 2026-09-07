@@ -144,11 +144,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
 
   useEffect(() => {
     weatherConditionRef.current = weatherCondition;
-    if (weatherCondition === 'rain') {
-      glassOverlayRef.current?.start();
-    } else {
-      glassOverlayRef.current?.stop();
-    }
+    glassOverlayRef.current?.setRainEnabled(weatherCondition === 'rain');
   }, [weatherCondition]);
 
   useEffect(() => {
@@ -500,9 +496,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
       const glass = createGlassRainOverlay(glassCanvasRef.current);
       glassOverlayRef.current = glass;
       glass.resize(width, height);
-      if (weatherConditionRef.current === 'rain') {
-        glass.start();
-      }
+      glass.setRainEnabled(weatherConditionRef.current === 'rain');
     }
 
     // Initial textures
@@ -540,6 +534,8 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
       targetRotationRef.current = null;
       previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
       momentumRef.current = { x: 0, y: 0 };
+      const rect = renderer.domElement.getBoundingClientRect();
+      glassOverlayRef.current?.addCrack(e.clientX - rect.left, e.clientY - rect.top);
     };
 
     const onPointerMove = (e) => {

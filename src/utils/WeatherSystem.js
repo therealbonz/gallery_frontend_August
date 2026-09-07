@@ -362,6 +362,35 @@ export function createGlassRainOverlay(canvas) {
     }
   }
 
+  // Cracks list
+  let cracks = [];
+  let isRainEnabled = true;
+
+  function addCrack(x, y) {
+    playGlassCrackSound();
+    cracks.push(new Crack(x, y));
+    if (cracks.length > 14) {
+      cracks.shift();
+    }
+    if (!isRunning) {
+      start();
+    }
+  }
+
+  function clearCracks() {
+    cracks = [];
+    if (!isRainEnabled) {
+      stop();
+    }
+  }
+
+  function setRainEnabled(enabled) {
+    isRainEnabled = enabled;
+    if (enabled && !isRunning) {
+      start();
+    }
+  }
+
   function resize(w, h) {
     width = w;
     height = h;
@@ -384,9 +413,26 @@ export function createGlassRainOverlay(canvas) {
 
     ctx.clearRect(0, 0, width, height);
 
-    for (const drop of drops) {
-      drop.update(delta);
-      drop.draw(ctx);
+    // 1. Draw and update rain droplets if rain is active
+    if (isRainEnabled) {
+      for (const drop of drops) {
+        drop.update(delta);
+        drop.draw(ctx);
+      }
+    }
+
+    // 2. Draw and update glass cracks
+    if (cracks.length > 0) {
+      cracks = cracks.filter((c) => c.update(now));
+      for (const crack of cracks) {
+        crack.draw(ctx);
+      }
+    }
+
+    // If neither rain nor cracks are active, sleep loop to save CPU
+    if (!isRainEnabled && cracks.length === 0) {
+      stop();
+      return;
     }
 
     animationId = requestAnimationFrame(loop);
@@ -395,7 +441,9 @@ export function createGlassRainOverlay(canvas) {
   function start() {
     if (isRunning) return;
     isRunning = true;
-    init();
+    if (isRainEnabled && drops.length === 0) {
+      init();
+    }
     lastTime = performance.now();
     animationId = requestAnimationFrame(loop);
   }
@@ -413,8 +461,250 @@ export function createGlassRainOverlay(canvas) {
     start,
     stop,
     resize,
+    addCrack,
+    clearCracks,
+    setRainEnabled,
     get isRunning() {
       return isRunning;
     }
   };
+}
+
+// -------------------------------------------------------------
+// 3. Screen Glass Crack Simulation (Procedural Impact Fractures)
+// -------------------------------------------------------------
+function playGlassCrackSound() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+
+    // High frequency fracture snap
+    const bufferSize = Math.floor(ctx.sampleRate * 0.12);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.015));
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.setValueAtTime(3600, now);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.45, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    noise.start(now);
+
+    // Glass ping resonance
+    const osc = ctx.createOscillator();
+    const oscGain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(5200 + Math.random() * 1200, now);
+    osc.frequency.exponentialRampToValueAtTime(1400, now + 0.15);
+
+    oscGain.gain.setValueAtTime(0.18, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+    osc.connect(oscGain);
+    oscGain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.16);
+  } catch (e) {}
+}
+
+class Crack {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.bornAt = performance.now();
+    this.lifespan = 12000; // 12 seconds
+    this.fadeStart = 8500;  // begins dissolving at 8.5s
+    this.opacity = 1.0;
+    this.progress = 0; // 0 to 1 over 70ms for lightning-fast propagation
+
+    // 8 to 14 main fracture rays
+    this.rays = [];
+    const rayCount = 9 + Math.floor(Math.random() * 6);
+    for (let i = 0; i < rayCount; i++) {
+      const baseAngle = (i / rayCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+      const totalLen = 50 + Math.random() * 160;
+      const steps = 3 + Math.floor(Math.random() * 4);
+      const stepLen = totalLen / steps;
+
+      const segments = [];
+      let curX = x;
+      let curY = y;
+      let curAngle = baseAngle;
+
+      for (let s = 0; s < steps; s++) {
+        curAngle += (Math.random() - 0.5) * 0.45;
+        const nextX = curX + Math.cos(curAngle) * stepLen;
+        const nextY = curY + Math.sin(curAngle) * stepLen;
+        segments.push({
+          x1: curX,
+          y1: curY,
+          x2: nextX,
+          y2: nextY,
+          distFrac: (s + 1) / steps
+        });
+
+        // Forking sub-crack
+        if (s > 0 && Math.random() < 0.45) {
+          const forkAngle = curAngle + (Math.random() < 0.5 ? 0.6 : -0.6);
+          const forkLen = stepLen * (0.8 + Math.random() * 0.7);
+          segments.push({
+            x1: nextX,
+            y1: nextY,
+            x2: nextX + Math.cos(forkAngle) * forkLen,
+            y2: nextY + Math.sin(forkAngle) * forkLen,
+            distFrac: (s + 1) / steps
+          });
+        }
+        curX = nextX;
+        curY = nextY;
+      }
+      this.rays.push(segments);
+    }
+
+    // Concentric spiderweb rings
+    this.rings = [];
+    const ringCount = 2 + Math.floor(Math.random() * 3);
+    for (let r = 1; r <= ringCount; r++) {
+      const ringRadius = (r / (ringCount + 1)) * 60 + 15;
+      const ringSteps = 10;
+      const pts = [];
+      for (let a = 0; a <= ringSteps; a++) {
+        const theta = (a / ringSteps) * Math.PI * 2;
+        const d = ringRadius * (0.85 + Math.random() * 0.3);
+        pts.push({ x: x + Math.cos(theta) * d, y: y + Math.sin(theta) * d });
+      }
+      this.rings.push(pts);
+    }
+
+    // Impact core shards
+    this.shards = [];
+    const shardCount = 8;
+    for (let i = 0; i < shardCount; i++) {
+      const a1 = (i / shardCount) * Math.PI * 2;
+      const a2 = ((i + 1) / shardCount) * Math.PI * 2;
+      const r = 8 + Math.random() * 12;
+      this.shards.push([
+        { x: x, y: y },
+        { x: x + Math.cos(a1) * r, y: y + Math.sin(a1) * r },
+        { x: x + Math.cos((a1 + a2) / 2) * (r * 1.3), y: y + Math.sin((a1 + a2) / 2) * (r * 1.3) },
+        { x: x + Math.cos(a2) * r, y: y + Math.sin(a2) * r }
+      ]);
+    }
+  }
+
+  update(now) {
+    const age = now - this.bornAt;
+    this.progress = Math.min(1, age / 70); // snappy propagation
+
+    if (age > this.lifespan) {
+      return false; // dead
+    }
+    if (age > this.fadeStart) {
+      this.opacity = 1 - (age - this.fadeStart) / (this.lifespan - this.fadeStart);
+    } else {
+      this.opacity = 1.0;
+    }
+    return true;
+  }
+
+  draw(ctx) {
+    if (this.opacity <= 0) return;
+    ctx.save();
+
+    // 1. Draw central pulverized shatter core
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, 16 * this.progress, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(224, 242, 254, ${0.3 * this.opacity})`;
+    ctx.fill();
+
+    // Shard polygons
+    for (const poly of this.shards) {
+      ctx.beginPath();
+      ctx.moveTo(poly[0].x, poly[0].y);
+      for (let i = 1; i < poly.length; i++) {
+        const px = this.x + (poly[i].x - this.x) * this.progress;
+        const py = this.y + (poly[i].y - this.y) * this.progress;
+        ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.2 * this.opacity})`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(15, 23, 42, ${0.55 * this.opacity})`;
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+    }
+
+    // 2. Draw spiderweb rings
+    ctx.beginPath();
+    for (const ring of this.rings) {
+      if (this.progress > 0.3) {
+        ctx.moveTo(ring[0].x, ring[0].y);
+        for (let i = 1; i < ring.length; i++) {
+          ctx.lineTo(ring[i].x, ring[i].y);
+        }
+      }
+    }
+    ctx.strokeStyle = `rgba(15, 23, 42, ${0.5 * this.opacity})`;
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    ctx.strokeStyle = `rgba(255, 255, 255, ${0.85 * this.opacity})`;
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    // 3. Draw radial fracture rays
+    // Layer A: dark refractive shadow line
+    ctx.beginPath();
+    for (const ray of this.rays) {
+      for (const seg of ray) {
+        if (seg.distFrac <= this.progress) {
+          ctx.moveTo(seg.x1, seg.y1);
+          ctx.lineTo(seg.x2, seg.y2);
+        }
+      }
+    }
+    ctx.strokeStyle = `rgba(15, 23, 42, ${0.7 * this.opacity})`;
+    ctx.lineWidth = 2.4;
+    ctx.stroke();
+
+    // Layer B: bright glass specular light line
+    ctx.beginPath();
+    for (const ray of this.rays) {
+      for (const seg of ray) {
+        if (seg.distFrac <= this.progress) {
+          ctx.moveTo(seg.x1, seg.y1);
+          ctx.lineTo(seg.x2, seg.y2);
+        }
+      }
+    }
+    ctx.strokeStyle = `rgba(255, 255, 255, ${0.98 * this.opacity})`;
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+
+    // Layer C: subtle cyan highlight
+    ctx.strokeStyle = `rgba(186, 230, 253, ${0.6 * this.opacity})`;
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+
+    // Central impact puncture pinpoint
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.98 * this.opacity})`;
+    ctx.fill();
+
+    ctx.restore();
+  }
 }
