@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, LogIn, UserPlus, LogOut, User, Sparkles } from 'lucide-react';
+import { Box, LogIn, UserPlus, LogOut, User, Sparkles, Monitor } from 'lucide-react';
 
 export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
   return (
@@ -21,6 +21,16 @@ export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
         </a>
 
         <div className="d-flex align-items-center gap-2">
+          <a
+            href="/?wallpaper=true"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-sm btn-outline-info d-flex align-items-center gap-1 rounded-pill px-3"
+            title="Launch Fullscreen 3D Live Wallpaper"
+          >
+            <Monitor size={15} />
+            <span className="d-none d-sm-inline">Live Wallpaper</span>
+          </a>
           {currentUser ? (
             <div className="d-flex align-items-center gap-3">
               <div className="d-flex align-items-center gap-2 bg-secondary bg-opacity-10 border border-secondary border-opacity-25 rounded-pill px-3 py-1">

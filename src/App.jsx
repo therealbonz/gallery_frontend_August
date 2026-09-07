@@ -5,10 +5,18 @@ import DragDropUploader from './components/DragDropUploader';
 import PhotoList from './components/PhotoList';
 import PhotoModal from './components/PhotoModal';
 import AuthModal from './components/AuthModal';
+import WallpaperView from './components/WallpaperView';
 import { api } from './services/api';
-import { Sparkles, Box, AlertCircle, RefreshCw } from 'lucide-react';
+import { Sparkles, Box, AlertCircle, RefreshCw, Monitor } from 'lucide-react';
 
 export default function App() {
+  const isWallpaperMode =
+    window.location.search.includes('wallpaper=true') ||
+    window.location.pathname.toLowerCase().includes('/wallpaper');
+
+  if (isWallpaperMode) {
+    return <WallpaperView />;
+  }
   const [photos, setPhotos] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
