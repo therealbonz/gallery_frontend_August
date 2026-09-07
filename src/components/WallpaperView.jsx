@@ -86,6 +86,7 @@ export default function WallpaperView() {
   const isDraggingRef = useRef(false);
   const previousMousePositionRef = useRef({ x: 0, y: 0 });
   const mouseParallaxRef = useRef({ x: 0, y: 0 });
+  const momentumVelocityRef = useRef({ x: 0, y: 0 });
 
   // Helper to slice photos per monitor/cube
   const getPhotoForFace = useCallback((faceIdx) => {
@@ -131,7 +132,7 @@ export default function WallpaperView() {
   useEffect(() => {
     const handleMessage = (event) => {
       if (!event.data) return;
-      const { action, speed, spin, deltaX, deltaY } = event.data;
+      const { action, speed, spin, deltaX, deltaY, clientX, clientY } = event.data;
       if (action === 'refresh') {
         fetchPhotos(false);
       } else if (action === 'setSpeed' && typeof speed === 'number') {
@@ -140,8 +141,18 @@ export default function WallpaperView() {
         setIsSpinning((prev) => (spin !== undefined ? spin : !prev));
       } else if (action === 'dragRotate') {
         if (cubeRef.current) {
-          cubeRef.current.rotation.y += (deltaX || 0) * 0.008;
-          cubeRef.current.rotation.x += (deltaY || 0) * 0.008;
+          const rY = (deltaX || 0) * 0.008;
+          const rX = (deltaY || 0) * 0.008;
+          cubeRef.current.rotation.y += rY;
+          cubeRef.current.rotation.x += rX;
+          momentumVelocityRef.current = { x: rX * 0.75, y: rY * 0.75 };
+        }
+      } else if (action === 'mouseMove') {
+        if (typeof clientX === 'number' && typeof clientY === 'number') {
+          mouseParallaxRef.current = {
+            x: (clientX / window.innerWidth) * 2 - 1,
+            y: -(clientY / window.innerHeight) * 2 + 1
+          };
         }
       }
     };
@@ -238,10 +249,6 @@ export default function WallpaperView() {
     const particles = new THREE.Points(particleGeo, particleMat);
     scene.add(particles);
 
-    // Momentum velocity refs
-    let momentumX = 0;
-    let momentumY = 0;
-
     // Animation loop
     const clock = new THREE.Clock();
     const animate = () => {
@@ -250,11 +257,11 @@ export default function WallpaperView() {
 
       if (cubeRef.current) {
         // Apply physics momentum from fling drag
-        if (Math.abs(momentumX) > 0.0001 || Math.abs(momentumY) > 0.0001) {
-          cubeRef.current.rotation.y += momentumY;
-          cubeRef.current.rotation.x += momentumX;
-          momentumX *= 0.92;
-          momentumY *= 0.92;
+        if (Math.abs(momentumVelocityRef.current.x) > 0.0001 || Math.abs(momentumVelocityRef.current.y) > 0.0001) {
+          cubeRef.current.rotation.y += momentumVelocityRef.current.y;
+          cubeRef.current.rotation.x += momentumVelocityRef.current.x;
+          momentumVelocityRef.current.x *= 0.92;
+          momentumVelocityRef.current.y *= 0.92;
         } else if (isSpinning && !isDraggingRef.current) {
           if (monitorIndex === 0) {
             cubeRef.current.rotation.y += delta * 0.35 * spinSpeed;
@@ -287,6 +294,7 @@ export default function WallpaperView() {
     const onMouseDown = (e) => {
       isDraggingRef.current = true;
       previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
+      momentumVelocityRef.current = { x: 0, y: 0 };
     };
 
     const onMouseMove = (e) => {
@@ -299,8 +307,11 @@ export default function WallpaperView() {
       const deltaX = e.clientX - previousMousePositionRef.current.x;
       const deltaY = e.clientY - previousMousePositionRef.current.y;
 
-      cubeRef.current.rotation.y += deltaX * 0.008;
-      cubeRef.current.rotation.x += deltaY * 0.008;
+      const rY = deltaX * 0.008;
+      const rX = deltaY * 0.008;
+      cubeRef.current.rotation.y += rY;
+      cubeRef.current.rotation.x += rX;
+      momentumVelocityRef.current = { x: rX * 0.75, y: rY * 0.75 };
 
       previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
     };
