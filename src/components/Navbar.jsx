@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, LogIn, UserPlus, LogOut, User, Sparkles, Monitor } from 'lucide-react';
+import { Box, LogIn, UserPlus, LogOut, User, Sparkles, Monitor, Smartphone } from 'lucide-react';
 
 export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
   return (
@@ -21,6 +21,15 @@ export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
         </a>
 
         <div className="d-flex align-items-center gap-2">
+          <a
+            href="/My3DCube.apk"
+            download="My3DCube.apk"
+            className="btn btn-sm btn-outline-light d-flex align-items-center gap-1 rounded-pill px-3"
+            title="Download Android App APK (Live Wallpaper + Phone Photo Uploads)"
+          >
+            <Smartphone size={15} />
+            <span className="d-none d-sm-inline">Android App</span>
+          </a>
           <a
             href="/?wallpaper=true"
             target="_blank"
