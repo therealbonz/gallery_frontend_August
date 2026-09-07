@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { api } from '../services/api';
-import { RefreshCw, Sparkles, Wifi, CloudRain, Snowflake, Cloud, Sun, Music, Mic, VolumeX, Play } from 'lucide-react';
+import { RefreshCw, Sparkles, Wifi, CloudRain, Snowflake, Cloud, Sun, Music, Mic, VolumeX, Play, Headphones, Radio } from 'lucide-react';
 import { create3DWeather, createGlassRainOverlay } from '../utils/WeatherSystem';
 import { AudioVisualizerManager, createEqualizerRing } from '../utils/AudioVisualizer';
 import { fetchLiveWeather, setStoredWeatherSetting, WEATHER_CONDITIONS, getStoredWeatherSetting } from '../utils/weatherService';
@@ -112,6 +112,16 @@ export default function WallpaperView() {
   const handleToggleAudio = useCallback(async () => {
     if (!audioVisRef.current) return;
     if (audioMode === 'off') {
+      // Attempt tab/system audio capture first (YouTube / Spotify sync)
+      const ok = await audioVisRef.current.startSystemOrTabAudio();
+      if (ok) {
+        setAudioMode('tab');
+      } else {
+        // Fallback to beat demo
+        audioVisRef.current.startDemoBeat();
+        setAudioMode('beat');
+      }
+    } else if (audioMode === 'tab' || audioMode === 'system') {
       audioVisRef.current.startDemoBeat();
       setAudioMode('beat');
     } else if (audioMode === 'beat') {
@@ -127,6 +137,29 @@ export default function WallpaperView() {
       setAudioMode('off');
     }
   }, [audioMode]);
+
+  // Periodic check for server updates to auto-reload live wallpaper in-place
+  useEffect(() => {
+    let lastVer = null;
+    const checkVersion = async () => {
+      try {
+        const res = await fetch(`/version.json?t=${Date.now()}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.updatedAt) {
+            if (lastVer !== null && lastVer !== data.updatedAt) {
+              console.log('New update deployed on server! Seamlessly auto-reloading wallpaper...');
+              window.location.reload();
+            }
+            lastVer = data.updatedAt;
+          }
+        }
+      } catch (e) {}
+    };
+    checkVersion();
+    const timer = setInterval(checkVersion, 45000);
+    return () => clearInterval(timer);
+  }, []);
 
   const handleCycleWeather = useCallback(() => {
     const list = [WEATHER_CONDITIONS.RAIN, WEATHER_CONDITIONS.SNOW, WEATHER_CONDITIONS.CLOUDY, WEATHER_CONDITIONS.CLEAR];
@@ -311,14 +344,33 @@ export default function WallpaperView() {
         setStoredWeatherSetting(w);
       } else if (action === 'toggleAudio') {
         handleToggleAudio();
+      } else if (action === 'systemAudio') {
+        if (audioVisRef.current) {
+          audioVisRef.current.setExternalAudioData(
+            event.data.bands,
+            event.data.bass,
+            event.data.mid,
+            event.data.treble
+          );
+          if (audioMode !== 'system') {
+            setAudioMode('system');
+          }
+        }
       } else if (action === 'setAudioMode' && typeof event.data.mode === 'string') {
         const m = event.data.mode.toLowerCase();
-        if (m === 'beat' && audioVisRef.current) {
+        if (m === 'system') {
+          setAudioMode('system');
+        } else if (m === 'beat' && audioVisRef.current) {
           audioVisRef.current.startDemoBeat();
           setAudioMode('beat');
         } else if (m === 'mic' && audioVisRef.current) {
           audioVisRef.current.startMic().then((ok) => {
             if (ok) setAudioMode('mic');
+            else setAudioMode('off');
+          });
+        } else if (m === 'tab' && audioVisRef.current) {
+          audioVisRef.current.startSystemOrTabAudio().then((ok) => {
+            if (ok) setAudioMode('tab');
             else setAudioMode('off');
           });
         } else {
@@ -829,10 +881,15 @@ export default function WallpaperView() {
           }}
         >
           {audioMode === 'off' && <Music size={15} />}
+          {audioMode === 'system' && <Headphones size={15} color="#2dd4bf" />}
+          {audioMode === 'tab' && <Radio size={15} color="#2dd4bf" />}
           {audioMode === 'beat' && <Play size={15} className="spin-anim" />}
           {audioMode === 'mic' && <Mic size={15} color="#2dd4bf" />}
           <span>
-            {audioMode === 'off' ? 'Visualizer: Off' : audioMode === 'beat' ? 'Visualizer: Beat' : 'Visualizer: Mic'}
+            {audioMode === 'off' ? 'Visualizer: Off' :
+             audioMode === 'system' ? 'Spotify / YouTube Sync' :
+             audioMode === 'tab' ? 'Tab Audio Sync' :
+             audioMode === 'beat' ? 'Visualizer: Beat' : 'Visualizer: Mic'}
           </span>
         </button>
       </div>

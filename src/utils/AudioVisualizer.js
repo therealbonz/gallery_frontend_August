@@ -57,6 +57,60 @@ export class AudioVisualizerManager {
     }
   }
 
+  async startSystemOrTabAudio() {
+    this.stop();
+    this.initContext();
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
+
+      const audioTracks = stream.getAudioTracks();
+      if (!audioTracks || audioTracks.length === 0) {
+        console.warn('No audio track shared. User must check "Share audio" when picking tab or screen.');
+        stream.getTracks().forEach((t) => t.stop());
+        return false;
+      }
+
+      // Immediately stop video track to save 100% CPU/GPU overhead
+      stream.getVideoTracks().forEach((t) => t.stop());
+
+      // If user stops sharing from browser bar
+      audioTracks[0].onended = () => {
+        this.stop();
+      };
+
+      this.micStream = stream;
+      this.sourceNode = this.audioCtx.createMediaStreamSource(stream);
+      this.sourceNode.connect(this.analyser);
+      this.mode = 'tab';
+      return true;
+    } catch (err) {
+      console.warn('System/Tab audio capture cancelled or failed:', err);
+      this.stop();
+      return false;
+    }
+  }
+
+  setExternalAudioData(bands, bass, mid, treble) {
+    this.mode = 'system';
+    if (typeof bass === 'number') this.bass = bass;
+    if (typeof mid === 'number') this.mid = mid;
+    if (typeof treble === 'number') this.treble = treble;
+    this.overall = (this.bass + this.mid + this.treble) / 3;
+
+    if (Array.isArray(bands) && bands.length === 32) {
+      for (let i = 0; i < 32; i++) {
+        this.frequencyBands[i] = bands[i];
+      }
+    }
+  }
+
   startDemoBeat() {
     this.stop();
     this.initContext();
@@ -182,6 +236,18 @@ export class AudioVisualizerManager {
   }
 
   update() {
+    if (this.mode === 'system') {
+      // In system loopback mode, values are pushed from WASAPI capture. Apply subtle damping.
+      this.bass *= 0.94;
+      this.mid *= 0.94;
+      this.treble *= 0.94;
+      this.overall *= 0.94;
+      for (let i = 0; i < 32; i++) {
+        this.frequencyBands[i] *= 0.94;
+      }
+      return;
+    }
+
     if (this.mode === 'off' || !this.analyser || !this.dataArray) {
       // Smooth decay to zero
       this.bass *= 0.88;

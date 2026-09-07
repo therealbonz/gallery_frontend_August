@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
-import { Play, Pause, RotateCw, ZoomIn, Eye, Layers, Video as VideoIcon, Image as ImageIcon, CloudRain, Snowflake, Cloud, Sun, Music, Mic } from 'lucide-react';
+import { Play, Pause, RotateCw, ZoomIn, Eye, Layers, Video as VideoIcon, Image as ImageIcon, CloudRain, Snowflake, Cloud, Sun, Music, Mic, Headphones, Radio, ExternalLink } from 'lucide-react';
 import { create3DWeather, createGlassRainOverlay } from '../utils/WeatherSystem';
 import { AudioVisualizerManager, createEqualizerRing } from '../utils/AudioVisualizer';
 import { fetchLiveWeather, setStoredWeatherSetting, WEATHER_CONDITIONS, getStoredWeatherSetting } from '../utils/weatherService';
@@ -158,6 +158,16 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
   const handleToggleAudio = useCallback(async () => {
     if (!audioVisRef.current) return;
     if (audioMode === 'off') {
+      // First attempt Tab audio capture (direct digital audio from YouTube / Spotify tab in browser)
+      const ok = await audioVisRef.current.startSystemOrTabAudio();
+      if (ok) {
+        setAudioMode('tab');
+      } else {
+        // If user cancelled tab capture dialog, fall back to beat demo
+        audioVisRef.current.startDemoBeat();
+        setAudioMode('beat');
+      }
+    } else if (audioMode === 'tab' || audioMode === 'system') {
       audioVisRef.current.startDemoBeat();
       setAudioMode('beat');
     } else if (audioMode === 'beat') {
@@ -753,12 +763,40 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
           title={`Music Reactive Visualizer: ${audioMode.toUpperCase()} (Click to toggle)`}
         >
           {audioMode === 'off' && <Music size={14} />}
+          {audioMode === 'tab' && <Radio size={14} className="text-info" />}
+          {audioMode === 'system' && <Headphones size={14} className="text-info" />}
           {audioMode === 'beat' && <Play size={14} className="text-warning spin-anim" />}
           {audioMode === 'mic' && <Mic size={14} className="text-info" />}
           <span className="small">
-            {audioMode === 'off' ? 'Visualizer: Off' : audioMode === 'beat' ? 'Visualizer: Beat' : 'Visualizer: Mic'}
+            {audioMode === 'off' ? 'Visualizer: Off' :
+             audioMode === 'tab' ? 'Sync: YouTube / Spotify' :
+             audioMode === 'system' ? 'Sync: Spotify / YouTube' :
+             audioMode === 'beat' ? 'Visualizer: Beat' : 'Visualizer: Mic'}
           </span>
         </button>
+
+        {audioMode === 'tab' && (
+          <div className="d-none d-md-flex align-items-center gap-1">
+            <a
+              href="https://open.spotify.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-sm btn-outline-success rounded-pill px-2 py-0 small text-decoration-none"
+              title="Open Spotify Web Player"
+            >
+              Spotify <ExternalLink size={10} />
+            </a>
+            <a
+              href="https://www.youtube.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-sm btn-outline-danger rounded-pill px-2 py-0 small text-decoration-none"
+              title="Open YouTube"
+            >
+              YouTube <ExternalLink size={10} />
+            </a>
+          </div>
+        )}
       </div>
 
       {/* Interactive Controls Overlay Bar */}
