@@ -6,13 +6,13 @@ import { RefreshCw, Sparkles, Wifi } from 'lucide-react';
 const FACE_NAMES = ['Right', 'Left', 'Top', 'Bottom', 'Front', 'Back'];
 const FACE_COLORS = ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4'];
 
-function createPlaceholderTexture(faceIndex) {
+function createPlaceholderTexture(faceIndex, monitorIndex = 0) {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
   canvas.height = 512;
   const ctx = canvas.getContext('2d');
 
-  const color = FACE_COLORS[faceIndex % FACE_COLORS.length];
+  const color = FACE_COLORS[(faceIndex + monitorIndex) % FACE_COLORS.length];
   const name = FACE_NAMES[faceIndex];
 
   // Deep space gradient
@@ -47,7 +47,7 @@ function createPlaceholderTexture(faceIndex) {
   ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
   ctx.font = 'bold 36px "Segoe UI", system-ui, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('MY-3D-CUBE', 256, 230);
+  ctx.fillText(`MY-3D-CUBE • CUBE ${monitorIndex + 1}`, 256, 230);
 
   ctx.fillStyle = color;
   ctx.font = '600 24px "Segoe UI", system-ui, sans-serif';
@@ -74,6 +74,7 @@ export default function WallpaperView() {
   // Parse URL query params
   const searchParams = new URLSearchParams(window.location.search);
   const isMinimal = searchParams.get('minimal') === 'true';
+  const monitorIndex = parseInt(searchParams.get('monitorIndex') || '0', 10);
 
   const sceneRef = useRef(null);
   const cubeRef = useRef(null);
@@ -85,6 +86,16 @@ export default function WallpaperView() {
   const isDraggingRef = useRef(false);
   const previousMousePositionRef = useRef({ x: 0, y: 0 });
   const mouseParallaxRef = useRef({ x: 0, y: 0 });
+
+  // Helper to slice photos per monitor/cube
+  const getPhotoForFace = useCallback((faceIdx) => {
+    if (!photos || photos.length === 0) return null;
+    const offset = monitorIndex * 6;
+    if (photos.length > offset) {
+      return photos[(offset + faceIdx) % photos.length];
+    }
+    return photos[faceIdx % photos.length];
+  }, [photos, monitorIndex]);
 
   // 1. Fetch photos from API
   const fetchPhotos = useCallback(async (silent = false) => {
@@ -120,13 +131,18 @@ export default function WallpaperView() {
   useEffect(() => {
     const handleMessage = (event) => {
       if (!event.data) return;
-      const { action, speed, spin } = event.data;
+      const { action, speed, spin, deltaX, deltaY } = event.data;
       if (action === 'refresh') {
         fetchPhotos(false);
       } else if (action === 'setSpeed' && typeof speed === 'number') {
         setSpinSpeed(speed);
       } else if (action === 'toggleSpin') {
         setIsSpinning((prev) => (spin !== undefined ? spin : !prev));
+      } else if (action === 'dragRotate') {
+        if (cubeRef.current) {
+          cubeRef.current.rotation.y += (deltaX || 0) * 0.008;
+          cubeRef.current.rotation.x += (deltaY || 0) * 0.008;
+        }
       }
     };
 
@@ -179,7 +195,7 @@ export default function WallpaperView() {
     // Initial placeholder materials
     const initialMaterials = [];
     for (let i = 0; i < 6; i++) {
-      const tex = createPlaceholderTexture(i);
+      const tex = createPlaceholderTexture(i, monitorIndex);
       initialMaterials.push(
         new THREE.MeshStandardMaterial({
           map: tex,
@@ -224,8 +240,16 @@ export default function WallpaperView() {
 
       if (cubeRef.current) {
         if (isSpinning && !isDraggingRef.current) {
-          cubeRef.current.rotation.y += delta * 0.35 * spinSpeed;
-          cubeRef.current.rotation.x += delta * 0.15 * spinSpeed;
+          if (monitorIndex === 0) {
+            cubeRef.current.rotation.y += delta * 0.35 * spinSpeed;
+            cubeRef.current.rotation.x += delta * 0.15 * spinSpeed;
+          } else if (monitorIndex === 1) {
+            cubeRef.current.rotation.y -= delta * 0.30 * spinSpeed;
+            cubeRef.current.rotation.z += delta * 0.18 * spinSpeed;
+          } else {
+            cubeRef.current.rotation.y += delta * 0.28 * spinSpeed;
+            cubeRef.current.rotation.x -= delta * 0.22 * spinSpeed;
+          }
         }
 
         // Mouse Parallax
@@ -308,7 +332,7 @@ export default function WallpaperView() {
     const newMaterials = [];
 
     for (let i = 0; i < 6; i++) {
-      const photo = photos[i];
+      const photo = getPhotoForFace(i);
 
       if (photo && photo.image_url) {
         if (photo.media_type === 'video') {
@@ -350,7 +374,7 @@ export default function WallpaperView() {
           );
         }
       } else {
-        const placeholderTex = createPlaceholderTexture(i);
+        const placeholderTex = createPlaceholderTexture(i, monitorIndex);
         newMaterials.push(
           new THREE.MeshStandardMaterial({
             map: placeholderTex,
@@ -363,7 +387,7 @@ export default function WallpaperView() {
 
     materialsRef.current = newMaterials;
     cubeRef.current.material = newMaterials;
-  }, [photos]);
+  }, [photos, getPhotoForFace, monitorIndex]);
 
   return (
     <div
