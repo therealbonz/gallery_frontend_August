@@ -133,6 +133,33 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
   const previousMousePositionRef = useRef({ x: 0, y: 0 });
   const momentumRef = useRef({ x: 0, y: 0 });
 
+  const photosRef = useRef(photos);
+  useEffect(() => {
+    photosRef.current = photos;
+  }, [photos]);
+
+  const [currentFacePhotos, setCurrentFacePhotos] = useState([]);
+  const nextPhotoIndexRef = useRef(6);
+  const faceUpdatedRef = useRef([false, false, false, false, false, false]);
+  const textureCacheRef = useRef(new Map());
+  const activeVideosByFaceRef = useRef([null, null, null, null, null, null]);
+
+  // Preload textures whenever photos list changes
+  useEffect(() => {
+    if (!photos || photos.length === 0) return;
+    const loader = new THREE.TextureLoader();
+    photos.forEach((photo) => {
+      if (photo && photo.image_url && photo.media_type !== 'video' && !textureCacheRef.current.has(photo.id)) {
+        loader.load(photo.image_url, (tex) => {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.generateMipmaps = true;
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          textureCacheRef.current.set(photo.id, tex);
+        });
+      }
+    });
+  }, [photos]);
+
   // Cleanup active video elements
   const cleanupVideos = useCallback(() => {
     activeVideosRef.current.forEach((video) => {
@@ -145,6 +172,94 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
       }
     });
     activeVideosRef.current = [];
+    activeVideosByFaceRef.current.forEach((video) => {
+      if (video) {
+        try {
+          video.pause();
+          video.removeAttribute('src');
+          video.load();
+        } catch (e) {}
+      }
+    });
+    activeVideosByFaceRef.current = [null, null, null, null, null, null];
+  }, []);
+
+  // Dynamic Face Swap: swaps face texture when it turns away to the back
+  const swapFacePhoto = useCallback((faceIndex) => {
+    const currentPhotos = photosRef.current;
+    if (!currentPhotos || currentPhotos.length === 0) return;
+    const mat = materialsRef.current[faceIndex];
+    if (!mat) return;
+
+    const nextIdx = nextPhotoIndexRef.current;
+    const photo = currentPhotos[nextIdx % currentPhotos.length];
+    nextPhotoIndexRef.current = (nextIdx + 1) % currentPhotos.length;
+
+    mat.userData.photo = photo;
+
+    // Clean up previous video on this face
+    if (activeVideosByFaceRef.current[faceIndex]) {
+      try {
+        const oldVid = activeVideosByFaceRef.current[faceIndex];
+        oldVid.pause();
+        oldVid.removeAttribute('src');
+        oldVid.load();
+      } catch (e) {}
+      activeVideosByFaceRef.current[faceIndex] = null;
+    }
+
+    if (photo && photo.image_url) {
+      if (photo.media_type === 'video') {
+        const video = document.createElement('video');
+        video.src = photo.image_url;
+        video.crossOrigin = 'anonymous';
+        video.loop = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.autoplay = true;
+        video.play().catch(() => {});
+        activeVideosByFaceRef.current[faceIndex] = video;
+
+        const videoTexture = new THREE.VideoTexture(video);
+        videoTexture.colorSpace = THREE.SRGBColorSpace;
+        videoTexture.minFilter = THREE.LinearFilter;
+        videoTexture.magFilter = THREE.LinearFilter;
+        mat.map = videoTexture;
+        mat.needsUpdate = true;
+      } else {
+        if (textureCacheRef.current.has(photo.id)) {
+          mat.map = textureCacheRef.current.get(photo.id);
+          mat.needsUpdate = true;
+        } else {
+          const loader = new THREE.TextureLoader();
+          loader.load(
+            photo.image_url,
+            (tex) => {
+              tex.colorSpace = THREE.SRGBColorSpace;
+              tex.generateMipmaps = true;
+              tex.minFilter = THREE.LinearMipmapLinearFilter;
+              textureCacheRef.current.set(photo.id, tex);
+              mat.map = tex;
+              mat.needsUpdate = true;
+            },
+            undefined,
+            () => {
+              mat.map = createPlaceholderTexture(faceIndex);
+              mat.needsUpdate = true;
+            }
+          );
+        }
+      }
+    } else {
+      mat.map = createPlaceholderTexture(faceIndex);
+      mat.needsUpdate = true;
+    }
+
+    setCurrentFacePhotos((prev) => {
+      const next = [...prev];
+      next[faceIndex] = photo;
+      return next;
+    });
   }, []);
 
   // Update materials when photos/videos change
@@ -153,9 +268,16 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
     cleanupVideos();
 
     const loader = new THREE.TextureLoader();
+    const initialFaces = [];
 
     for (let i = 0; i < 6; i++) {
-      const photo = photosList[i];
+      const photo = photosList.length > 0 ? photosList[i % photosList.length] : null;
+      initialFaces[i] = photo;
+
+      if (materialsRef.current[i]) {
+        materialsRef.current[i].userData.photo = photo;
+      }
+
       if (photo && photo.image_url) {
         if (photo.media_type === 'video') {
           // Live Video Texture
@@ -169,6 +291,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
           video.play().catch(() => {});
 
           activeVideosRef.current.push(video);
+          activeVideosByFaceRef.current[i] = video;
 
           const videoTexture = new THREE.VideoTexture(video);
           videoTexture.colorSpace = THREE.SRGBColorSpace;
@@ -180,24 +303,34 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
             materialsRef.current[i].needsUpdate = true;
           }
         } else {
-          // Standard Image Texture
-          loader.load(
-            photo.image_url,
-            (texture) => {
-              texture.colorSpace = THREE.SRGBColorSpace;
-              if (materialsRef.current[i]) {
-                materialsRef.current[i].map = texture;
-                materialsRef.current[i].needsUpdate = true;
-              }
-            },
-            undefined,
-            () => {
-              if (materialsRef.current[i]) {
-                materialsRef.current[i].map = createPlaceholderTexture(i);
-                materialsRef.current[i].needsUpdate = true;
-              }
+          // Check cache or load
+          if (textureCacheRef.current.has(photo.id)) {
+            if (materialsRef.current[i]) {
+              materialsRef.current[i].map = textureCacheRef.current.get(photo.id);
+              materialsRef.current[i].needsUpdate = true;
             }
-          );
+          } else {
+            loader.load(
+              photo.image_url,
+              (texture) => {
+                texture.colorSpace = THREE.SRGBColorSpace;
+                texture.generateMipmaps = true;
+                texture.minFilter = THREE.LinearMipmapLinearFilter;
+                textureCacheRef.current.set(photo.id, texture);
+                if (materialsRef.current[i]) {
+                  materialsRef.current[i].map = texture;
+                  materialsRef.current[i].needsUpdate = true;
+                }
+              },
+              undefined,
+              () => {
+                if (materialsRef.current[i]) {
+                  materialsRef.current[i].map = createPlaceholderTexture(i);
+                  materialsRef.current[i].needsUpdate = true;
+                }
+              }
+            );
+          }
         }
       } else {
         // Fallback procedural canvas texture
@@ -207,6 +340,10 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
         }
       }
     }
+
+    setCurrentFacePhotos(initialFaces);
+    nextPhotoIndexRef.current = photosList.length > 6 ? 6 : 0;
+    faceUpdatedRef.current = [false, false, false, false, false, false];
   }, [cleanupVideos]);
 
   // Animate smoothly to specific face
@@ -303,8 +440,9 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
         const materialIndex = intersects[0].materialIndex;
         if (materialIndex !== undefined) {
           setActiveFace(materialIndex);
-          if (photos[materialIndex]) {
-            onSelectPhoto?.(photos[materialIndex]);
+          const clickedPhoto = materialsRef.current[materialIndex]?.userData?.photo || photosRef.current[materialIndex];
+          if (clickedPhoto) {
+            onSelectPhoto?.(clickedPhoto);
           }
         }
       }
@@ -347,12 +485,41 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
     window.addEventListener('pointerup', onPointerUp);
     domElement.addEventListener('click', handleClick);
 
-    // 9. Render Loop
+    // 9. Render Loop & Face-Rotation Swap Detector
+    const localNormals = [
+      new THREE.Vector3(1, 0, 0),  // 0: Right (+X)
+      new THREE.Vector3(-1, 0, 0), // 1: Left (-X)
+      new THREE.Vector3(0, 1, 0),  // 2: Top (+Y)
+      new THREE.Vector3(0, -1, 0), // 3: Bottom (-Y)
+      new THREE.Vector3(0, 0, 1),  // 4: Front (+Z)
+      new THREE.Vector3(0, 0, -1), // 5: Back (-Z)
+    ];
+    const rotMatrix = new THREE.Matrix4();
+    const worldNormal = new THREE.Vector3();
+
     let animationFrameId;
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
 
       if (cubeRef.current) {
+        // Dynamic Face Cycling: swap textures when a face is turned away to the back
+        if (photosRef.current.length > 0 && materialsRef.current.length === 6) {
+          rotMatrix.makeRotationFromEuler(cubeRef.current.rotation);
+          for (let i = 0; i < 6; i++) {
+            worldNormal.copy(localNormals[i]).applyMatrix4(rotMatrix);
+            // When worldNormal.z < -0.2, the face is pointing away and hidden from viewer
+            if (worldNormal.z < -0.2) {
+              if (!faceUpdatedRef.current[i]) {
+                faceUpdatedRef.current[i] = true;
+                swapFacePhoto(i);
+              }
+            } else if (worldNormal.z > 0.1) {
+              // Face has turned back towards front view; reset flag for next revolution
+              faceUpdatedRef.current[i] = false;
+            }
+          }
+        }
+
         if (targetRotationRef.current) {
           const target = targetRotationRef.current;
           cubeRef.current.rotation.x += (target.x - cubeRef.current.rotation.x) * 0.08;
@@ -406,13 +573,13 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
       });
       renderer.dispose();
     };
-  }, [cleanupVideos]);
+  }, [cleanupVideos, swapFacePhoto]);
 
   useEffect(() => {
     updateCubeMaterials(photos);
   }, [photos, updateCubeMaterials]);
 
-  const activePhoto = photos[activeFace];
+  const activePhoto = currentFacePhotos[activeFace] || photos[activeFace];
 
   return (
     <div className="card bg-black border-secondary border-opacity-25 shadow-2xl overflow-hidden position-relative mb-4">
@@ -429,9 +596,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
           <Layers size={16} />
           {photos.length === 0
             ? 'My-3D-Cube: Procedural Fallback Textures'
-            : photos.length < 6
-            ? `My-3D-Cube: ${photos.length}/6 Faces Filled`
-            : 'My-3D-Cube: All 6 Faces Active'}
+            : `My-3D-Cube: ${photos.length} Media • Switching on Every Face Turn`}
         </span>
       </div>
 
@@ -483,7 +648,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
           <div className="col-12 col-md d-flex flex-wrap align-items-center justify-content-md-end gap-1">
             <span className="text-secondary small me-1">Snap Face:</span>
             {FACE_NAMES.map((name, idx) => {
-              const photo = photos[idx];
+              const photo = currentFacePhotos[idx] || photos[idx];
               const isVideo = photo?.media_type === 'video';
               return (
                 <button

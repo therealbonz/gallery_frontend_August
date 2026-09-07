@@ -88,6 +88,32 @@ export default function WallpaperView() {
   const mouseParallaxRef = useRef({ x: 0, y: 0 });
   const momentumVelocityRef = useRef({ x: 0, y: 0 });
 
+  const photosRef = useRef(photos);
+  useEffect(() => {
+    photosRef.current = photos;
+  }, [photos]);
+
+  const nextPhotoIndexRef = useRef(0);
+  const faceUpdatedRef = useRef([false, false, false, false, false, false]);
+  const textureCacheRef = useRef(new Map());
+  const activeVideosByFaceRef = useRef([null, null, null, null, null, null]);
+
+  // Preload textures into cache for 0ms instantaneous face swapping
+  useEffect(() => {
+    if (!photos || photos.length === 0) return;
+    const loader = new THREE.TextureLoader();
+    photos.forEach((photo) => {
+      if (photo && photo.image_url && photo.media_type !== 'video' && !textureCacheRef.current.has(photo.id)) {
+        loader.load(photo.image_url, (tex) => {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.generateMipmaps = true;
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          textureCacheRef.current.set(photo.id, tex);
+        });
+      }
+    });
+  }, [photos]);
+
   // Helper to slice photos per monitor/cube
   const getPhotoForFace = useCallback((faceIdx) => {
     if (!photos || photos.length === 0) return null;
@@ -97,6 +123,77 @@ export default function WallpaperView() {
     }
     return photos[faceIdx % photos.length];
   }, [photos, monitorIndex]);
+
+  // Dynamic Face Swap: seamlessly swap face texture when it turns away to the back
+  const swapFacePhoto = useCallback((faceIndex) => {
+    const currentPhotos = photosRef.current;
+    if (!currentPhotos || currentPhotos.length === 0) return;
+    const mat = materialsRef.current[faceIndex];
+    if (!mat) return;
+
+    const nextIdx = nextPhotoIndexRef.current;
+    const photo = currentPhotos[nextIdx % currentPhotos.length];
+    nextPhotoIndexRef.current = (nextIdx + 1) % currentPhotos.length;
+
+    // Clean up previous video on this face if any
+    if (activeVideosByFaceRef.current[faceIndex]) {
+      try {
+        const oldVid = activeVideosByFaceRef.current[faceIndex];
+        oldVid.pause();
+        oldVid.removeAttribute('src');
+        oldVid.load();
+      } catch (e) {}
+      activeVideosByFaceRef.current[faceIndex] = null;
+    }
+
+    if (photo && photo.image_url) {
+      if (photo.media_type === 'video') {
+        const video = document.createElement('video');
+        video.src = photo.image_url;
+        video.crossOrigin = 'anonymous';
+        video.loop = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.autoplay = true;
+        video.play().catch(() => {});
+        activeVideosByFaceRef.current[faceIndex] = video;
+
+        const videoTexture = new THREE.VideoTexture(video);
+        videoTexture.colorSpace = THREE.SRGBColorSpace;
+        videoTexture.minFilter = THREE.LinearFilter;
+        videoTexture.magFilter = THREE.LinearFilter;
+        videoTexture.generateMipmaps = false;
+        mat.map = videoTexture;
+        mat.needsUpdate = true;
+      } else {
+        if (textureCacheRef.current.has(photo.id)) {
+          mat.map = textureCacheRef.current.get(photo.id);
+          mat.needsUpdate = true;
+        } else {
+          const loader = new THREE.TextureLoader();
+          loader.load(
+            photo.image_url,
+            (tex) => {
+              tex.colorSpace = THREE.SRGBColorSpace;
+              tex.generateMipmaps = true;
+              tex.minFilter = THREE.LinearMipmapLinearFilter;
+              textureCacheRef.current.set(photo.id, tex);
+              mat.map = tex;
+              mat.needsUpdate = true;
+            },
+            undefined,
+            () => {
+              mat.map = createPlaceholderTexture(faceIndex, monitorIndex);
+              mat.needsUpdate = true;
+            }
+          );
+        }
+      }
+    } else {
+      mat.map = createPlaceholderTexture(faceIndex, monitorIndex);
+      mat.needsUpdate = true;
+    }
+  }, [monitorIndex]);
 
   // 1. Fetch photos from API
   const fetchPhotos = useCallback(async (silent = false) => {
@@ -249,13 +346,42 @@ export default function WallpaperView() {
     const particles = new THREE.Points(particleGeo, particleMat);
     scene.add(particles);
 
-    // Animation loop
+    // Animation loop & Face-Rotation Swap Detector
+    const localNormals = [
+      new THREE.Vector3(1, 0, 0),  // 0: Right (+X)
+      new THREE.Vector3(-1, 0, 0), // 1: Left (-X)
+      new THREE.Vector3(0, 1, 0),  // 2: Top (+Y)
+      new THREE.Vector3(0, -1, 0), // 3: Bottom (-Y)
+      new THREE.Vector3(0, 0, 1),  // 4: Front (+Z)
+      new THREE.Vector3(0, 0, -1), // 5: Back (-Z)
+    ];
+    const rotMatrix = new THREE.Matrix4();
+    const worldNormal = new THREE.Vector3();
+
     const clock = new THREE.Clock();
     const animate = () => {
       animFrameIdRef.current = requestAnimationFrame(animate);
       const delta = clock.getDelta();
 
       if (cubeRef.current) {
+        // Dynamic Face Cycling: swap textures when a face is turned away to the back
+        if (photosRef.current.length > 0 && materialsRef.current.length === 6) {
+          rotMatrix.makeRotationFromEuler(cubeRef.current.rotation);
+          for (let i = 0; i < 6; i++) {
+            worldNormal.copy(localNormals[i]).applyMatrix4(rotMatrix);
+            // When worldNormal.z < -0.2, the face is pointing away and completely hidden from view
+            if (worldNormal.z < -0.2) {
+              if (!faceUpdatedRef.current[i]) {
+                faceUpdatedRef.current[i] = true;
+                swapFacePhoto(i);
+              }
+            } else if (worldNormal.z > 0.1) {
+              // Face has turned back towards front; reset flag for next revolution
+              faceUpdatedRef.current[i] = false;
+            }
+          }
+        }
+
         // Apply physics momentum from fling drag
         if (Math.abs(momentumVelocityRef.current.x) > 0.0001 || Math.abs(momentumVelocityRef.current.y) > 0.0001) {
           cubeRef.current.rotation.y += momentumVelocityRef.current.y;
@@ -345,7 +471,7 @@ export default function WallpaperView() {
       }
       renderer.dispose();
     };
-  }, [spinSpeed, isSpinning]);
+  }, [spinSpeed, isSpinning, monitorIndex, swapFacePhoto]);
 
   // 3. Update textures when photos change
   useEffect(() => {
@@ -376,6 +502,7 @@ export default function WallpaperView() {
 
           video.play().catch((err) => console.warn('Wallpaper video autoplay deferred:', err));
           videoElementsRef.current.push(video);
+          activeVideosByFaceRef.current[i] = video;
 
           const videoTexture = new THREE.VideoTexture(video);
           videoTexture.minFilter = THREE.LinearFilter;
@@ -390,10 +517,17 @@ export default function WallpaperView() {
             })
           );
         } else {
-          const imageTexture = textureLoader.load(photo.image_url, (tex) => {
-            tex.generateMipmaps = true;
-            tex.minFilter = THREE.LinearMipmapLinearFilter;
-          });
+          let imageTexture;
+          if (textureCacheRef.current.has(photo.id)) {
+            imageTexture = textureCacheRef.current.get(photo.id);
+          } else {
+            imageTexture = textureLoader.load(photo.image_url, (tex) => {
+              tex.colorSpace = THREE.SRGBColorSpace;
+              tex.generateMipmaps = true;
+              tex.minFilter = THREE.LinearMipmapLinearFilter;
+              textureCacheRef.current.set(photo.id, tex);
+            });
+          }
 
           newMaterials.push(
             new THREE.MeshStandardMaterial({
@@ -417,6 +551,10 @@ export default function WallpaperView() {
 
     materialsRef.current = newMaterials;
     cubeRef.current.material = newMaterials;
+
+    const offset = monitorIndex * 6;
+    nextPhotoIndexRef.current = photos.length > 0 ? (offset + 6) % photos.length : 0;
+    faceUpdatedRef.current = [false, false, false, false, false, false];
   }, [photos, getPhotoForFace, monitorIndex]);
 
   return (
