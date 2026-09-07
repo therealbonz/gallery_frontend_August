@@ -575,9 +575,48 @@ export default function WallpaperView() {
       isDraggingRef.current = false;
     };
 
+    // Touch events for mobile & in-app preview
+    const onTouchStart = (e) => {
+      if (e.touches && e.touches.length > 0) {
+        const touch = e.touches[0];
+        isDraggingRef.current = true;
+        previousMousePositionRef.current = { x: touch.clientX, y: touch.clientY };
+        momentumVelocityRef.current = { x: 0, y: 0 };
+        glassOverlayRef.current?.addCrack(touch.clientX, touch.clientY);
+      }
+    };
+
+    const onTouchMove = (e) => {
+      if (!e.touches || e.touches.length === 0) return;
+      const touch = e.touches[0];
+      mouseParallaxRef.current = {
+        x: (touch.clientX / window.innerWidth) * 2 - 1,
+        y: -(touch.clientY / window.innerHeight) * 2 + 1
+      };
+
+      if (!isDraggingRef.current || !cubeRef.current) return;
+      const deltaX = touch.clientX - previousMousePositionRef.current.x;
+      const deltaY = touch.clientY - previousMousePositionRef.current.y;
+
+      const rY = deltaX * 0.008;
+      const rX = deltaY * 0.008;
+      cubeRef.current.rotation.y += rY;
+      cubeRef.current.rotation.x += rX;
+      momentumVelocityRef.current = { x: rX * 0.75, y: rY * 0.75 };
+
+      previousMousePositionRef.current = { x: touch.clientX, y: touch.clientY };
+    };
+
+    const onTouchEnd = () => {
+      isDraggingRef.current = false;
+    };
+
     window.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', onTouchEnd, { passive: true });
 
     const handleResize = () => {
       if (!container) return;
@@ -597,6 +636,9 @@ export default function WallpaperView() {
       window.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
       if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
       if (container && renderer.domElement) {
         container.removeChild(renderer.domElement);
@@ -704,6 +746,7 @@ export default function WallpaperView() {
         overflow: 'hidden',
         background: '#07090e',
         userSelect: 'none',
+        touchAction: 'none',
         cursor: 'grab'
       }}
     >
