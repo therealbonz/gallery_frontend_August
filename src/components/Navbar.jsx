@@ -28,8 +28,23 @@ export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
             title="Download Google Chrome Extension (.zip) - Cast YouTube/Twitch videos to 3D Cube Face"
           >
             <Cast size={15} />
-            <span className="d-none d-sm-inline">Chrome Plugin (.zip)</span>
           </a>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const res = await fetch('http://127.0.0.1:48124/api/window-caster/show', { signal: AbortSignal.timeout(1500) });
+                if (res.ok) return;
+              } catch (e) {}
+              alert('To cast Windows application windows to your 3D cube, launch the My-3D-Cube Windows App (.exe) and click "Cast Windows Window to Cube..." from the system tray menu.');
+            }}
+            className="btn btn-sm btn-outline-cyan d-flex align-items-center gap-1 rounded-pill px-3 text-info border-info"
+            style={{ background: 'transparent' }}
+            title="Cast any Windows Application Window (Spotify, Discord, Games, etc.) onto 3D Cube Face"
+          >
+            <Cast size={15} />
+            <span className="d-none d-sm-inline">Cast Windows App</span>
+          </button>
           <a
             href="/api/v1/download/exe"
             download="My3DCubeWallpaper.exe"

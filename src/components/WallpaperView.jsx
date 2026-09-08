@@ -215,6 +215,10 @@ export default function WallpaperView() {
   const lockedFacesRef = useRef(new Set());
   const livePeerConnectionRef = useRef(null);
   const liveStreamVideoRef = useRef(null);
+  const windowStreamImgRef = useRef(null);
+  const windowStreamCanvasRef = useRef(null);
+  const windowStreamTextureRef = useRef(null);
+  const isWindowStreamingRef = useRef(false);
   const recentHistoryRef = useRef([]); // Anti-repetition LRU queue of recently featured photo IDs
 
   // Preload textures into cache for 0ms instantaneous face swapping
@@ -602,6 +606,88 @@ export default function WallpaperView() {
     }
   }, [swapFacePhoto]);
 
+  const handleStartWindowStream = useCallback((data) => {
+    try {
+      const faceIndex = (data.faceIndex !== undefined && data.faceIndex >= 0 && data.faceIndex < 6) ? data.faceIndex : -1;
+      const allFaces = data.allFaces !== false || faceIndex === -1;
+      const streamUrl = data.streamUrl || `http://127.0.0.1:48124/api/stream/window.mjpg?t=${Date.now()}`;
+
+      console.log('[WallpaperView] Starting Window Stream:', streamUrl, 'allFaces:', allFaces, 'faceIndex:', faceIndex);
+
+      if (!windowStreamCanvasRef.current) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1024;
+        canvas.height = 1024;
+        windowStreamCanvasRef.current = canvas;
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false;
+        windowStreamTextureRef.current = texture;
+      }
+
+      let img = windowStreamImgRef.current;
+      if (!img) {
+        img = new Image();
+        img.crossOrigin = 'anonymous';
+        windowStreamImgRef.current = img;
+      }
+
+      img.src = streamUrl;
+      isWindowStreamingRef.current = true;
+
+      const texture = windowStreamTextureRef.current;
+      if (allFaces) {
+        materialsRef.current.forEach((mat) => {
+          if (mat) {
+            mat.map = texture;
+            mat.needsUpdate = true;
+          }
+        });
+        for (let i = 0; i < 6; i++) {
+          lockedFacesRef.current.add(i);
+        }
+      } else if (faceIndex >= 0) {
+        const mat = materialsRef.current[faceIndex];
+        if (mat) {
+          mat.map = texture;
+          mat.needsUpdate = true;
+        }
+        lockedFacesRef.current.add(faceIndex);
+      }
+    } catch (err) {
+      console.error('[WallpaperView] handleStartWindowStream error:', err);
+    }
+  }, []);
+
+  const handleStopWindowStream = useCallback((data) => {
+    try {
+      const faceIndex = data?.faceIndex ?? -1;
+      const stopAll = faceIndex === -1 || faceIndex === 'all' || data?.allFaces !== false || lockedFacesRef.current.size >= 6;
+
+      console.log('[WallpaperView] Stopping Window Stream, stopAll:', stopAll);
+      isWindowStreamingRef.current = false;
+
+      if (windowStreamImgRef.current) {
+        windowStreamImgRef.current.src = '';
+      }
+
+      if (stopAll) {
+        lockedFacesRef.current.clear();
+        for (let i = 0; i < 6; i++) {
+          swapFacePhoto(i);
+        }
+      } else {
+        lockedFacesRef.current.delete(faceIndex);
+        swapFacePhoto(faceIndex);
+      }
+    } catch (err) {
+      console.error('[WallpaperView] handleStopWindowStream error:', err);
+    }
+  }, [swapFacePhoto]);
+
   // Listen to postMessage from Windows C# host
   useEffect(() => {
     const handleMessage = (event) => {
@@ -696,6 +782,10 @@ export default function WallpaperView() {
         handleWebRtcCandidate(data);
       } else if (action === 'stopChromeStream') {
         handleStopChromeStream(data);
+      } else if (action === 'startWindowStream') {
+        handleStartWindowStream(data);
+      } else if (action === 'stopWindowStream') {
+        handleStopWindowStream(data);
       }
     };
 
@@ -709,7 +799,7 @@ export default function WallpaperView() {
         window.chrome.webview.removeEventListener('message', handleMessage);
       }
     };
-  }, [fetchPhotos, handleToggleAudio, swapFacePhoto]);
+  }, [fetchPhotos, handleToggleAudio, swapFacePhoto, handleStartWindowStream, handleStopWindowStream]);
 
   // 2. Initialize Three.js Scene
   useEffect(() => {
@@ -876,6 +966,18 @@ export default function WallpaperView() {
             mat.map.needsUpdate = true;
           }
         });
+      }
+
+      // Keep live window streaming texture continuously fresh on each animation frame
+      if (isWindowStreamingRef.current && windowStreamImgRef.current && windowStreamImgRef.current.naturalWidth > 0 && windowStreamCanvasRef.current) {
+        const canvas = windowStreamCanvasRef.current;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(windowStreamImgRef.current, 0, 0, canvas.width, canvas.height);
+          if (windowStreamTextureRef.current) {
+            windowStreamTextureRef.current.needsUpdate = true;
+          }
+        }
       }
 
       if (cubeRef.current) {

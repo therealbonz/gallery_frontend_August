@@ -55,35 +55,67 @@ function binaryServePlugin() {
   };
 }
 
+function getHttpsConfig() {
+  const certPath = process.env.SSL_CERT_PATH || '/etc/letsencrypt/live/therealbonz.com/fullchain.pem';
+  const keyPath = process.env.SSL_KEY_PATH || '/etc/letsencrypt/live/therealbonz.com/privkey.pem';
+
+  try {
+    if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+      return {
+        cert: fs.readFileSync(certPath),
+        key: fs.readFileSync(keyPath),
+      };
+    }
+  } catch (err) {
+    console.warn(`[Vite SSL] Certificates located at ${certPath} but cannot be read (${err.message}). Defaulting to HTTP.`);
+  }
+  return undefined;
+}
+
+const httpsConfig = getHttpsConfig();
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react(), binaryServePlugin()],
   server: {
     port: 5173,
     host: true,
+    https: httpsConfig,
+    hmr: httpsConfig ? {
+      protocol: 'wss',
+      host: 'therealbonz.com',
+      clientPort: 5173,
+    } : undefined,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:3000',
         changeOrigin: true,
+        secure: false,
       },
       '/rails': {
         target: 'http://127.0.0.1:3000',
         changeOrigin: true,
+        secure: false,
       }
     }
   },
   preview: {
     port: 5173,
     host: true,
+    allowedHosts: ['therealbonz.com'],
+    https: httpsConfig,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:3000',
         changeOrigin: true,
+        secure: false,
       },
       '/rails': {
         target: 'http://127.0.0.1:3000',
         changeOrigin: true,
+        secure: false,
       }
     }
   }
 })
+

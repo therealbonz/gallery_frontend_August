@@ -211,6 +211,10 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
   const lockedFacesRef = useRef(new Set());
   const livePeerConnectionRef = useRef(null);
   const liveStreamVideoRef = useRef(null);
+  const windowStreamImgRef = useRef(null);
+  const windowStreamCanvasRef = useRef(null);
+  const windowStreamTextureRef = useRef(null);
+  const isWindowStreamingRef = useRef(false);
   const recentHistoryRef = useRef([]); // Anti-repetition LRU queue of recently featured photo IDs
 
   // Preload textures whenever photos list changes
@@ -747,6 +751,18 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
         });
       }
 
+      // Keep live window streaming texture fresh on each animation frame
+      if (isWindowStreamingRef.current && windowStreamImgRef.current && windowStreamImgRef.current.naturalWidth > 0 && windowStreamCanvasRef.current) {
+        const canvas = windowStreamCanvasRef.current;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(windowStreamImgRef.current, 0, 0, canvas.width, canvas.height);
+          if (windowStreamTextureRef.current) {
+            windowStreamTextureRef.current.needsUpdate = true;
+          }
+        }
+      }
+
       renderer.render(scene, camera);
     };
     animate();
@@ -975,6 +991,88 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
     }
   }, [swapFacePhoto]);
 
+  const handleStartWindowStream = useCallback((data) => {
+    try {
+      const faceIndex = (data.faceIndex !== undefined && data.faceIndex >= 0 && data.faceIndex < 6) ? data.faceIndex : -1;
+      const allFaces = data.allFaces !== false || faceIndex === -1;
+      const streamUrl = data.streamUrl || `http://127.0.0.1:48124/api/stream/window.mjpg?t=${Date.now()}`;
+
+      console.log('[SpinningCube] Starting Window Stream:', streamUrl, 'allFaces:', allFaces, 'faceIndex:', faceIndex);
+
+      if (!windowStreamCanvasRef.current) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1024;
+        canvas.height = 1024;
+        windowStreamCanvasRef.current = canvas;
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false;
+        windowStreamTextureRef.current = texture;
+      }
+
+      let img = windowStreamImgRef.current;
+      if (!img) {
+        img = new Image();
+        img.crossOrigin = 'anonymous';
+        windowStreamImgRef.current = img;
+      }
+
+      img.src = streamUrl;
+      isWindowStreamingRef.current = true;
+
+      const texture = windowStreamTextureRef.current;
+      if (allFaces) {
+        materialsRef.current.forEach((mat) => {
+          if (mat) {
+            mat.map = texture;
+            mat.needsUpdate = true;
+          }
+        });
+        for (let i = 0; i < 6; i++) {
+          lockedFacesRef.current.add(i);
+        }
+      } else if (faceIndex >= 0) {
+        const mat = materialsRef.current[faceIndex];
+        if (mat) {
+          mat.map = texture;
+          mat.needsUpdate = true;
+        }
+        lockedFacesRef.current.add(faceIndex);
+      }
+    } catch (err) {
+      console.error('[SpinningCube] handleStartWindowStream error:', err);
+    }
+  }, []);
+
+  const handleStopWindowStream = useCallback((data) => {
+    try {
+      const faceIndex = data?.faceIndex ?? -1;
+      const stopAll = faceIndex === -1 || faceIndex === 'all' || data?.allFaces !== false || lockedFacesRef.current.size >= 6;
+
+      console.log('[SpinningCube] Stopping Window Stream, stopAll:', stopAll);
+      isWindowStreamingRef.current = false;
+
+      if (windowStreamImgRef.current) {
+        windowStreamImgRef.current.src = '';
+      }
+
+      if (stopAll) {
+        lockedFacesRef.current.clear();
+        for (let i = 0; i < 6; i++) {
+          swapFacePhoto(i);
+        }
+      } else {
+        lockedFacesRef.current.delete(faceIndex);
+        swapFacePhoto(faceIndex);
+      }
+    } catch (err) {
+      console.error('[SpinningCube] handleStopWindowStream error:', err);
+    }
+  }, [swapFacePhoto]);
+
   useEffect(() => {
     const handleMsg = (event) => {
       let data = event.data;
@@ -988,11 +1086,23 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
         handleWebRtcCandidate(data);
       } else if (data.action === 'stopChromeStream') {
         handleStopChromeStream(data);
+      } else if (data.action === 'startWindowStream') {
+        handleStartWindowStream(data);
+      } else if (data.action === 'stopWindowStream') {
+        handleStopWindowStream(data);
       }
     };
     window.addEventListener('message', handleMsg);
-    return () => window.removeEventListener('message', handleMsg);
-  }, [handleWebRtcOffer, handleWebRtcCandidate, handleStopChromeStream]);
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.addEventListener('message', handleMsg);
+    }
+    return () => {
+      window.removeEventListener('message', handleMsg);
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.removeEventListener('message', handleMsg);
+      }
+    };
+  }, [handleWebRtcOffer, handleWebRtcCandidate, handleStopChromeStream, handleStartWindowStream, handleStopWindowStream]);
 
   const activePhoto = currentFacePhotos[activeFace] || photos[activeFace];
 
