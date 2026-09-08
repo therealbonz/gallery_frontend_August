@@ -211,6 +211,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
   const lockedFacesRef = useRef(new Set());
   const livePeerConnectionRef = useRef(null);
   const liveStreamVideoRef = useRef(null);
+  const recentHistoryRef = useRef([]); // Anti-repetition LRU queue of recently featured photo IDs
 
   // Preload textures whenever photos list changes
   useEffect(() => {
@@ -253,6 +254,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
   }, []);
 
   // Dynamic Face Swap: swaps face texture when it turns away to the back
+  // Features newer images significantly more often with weighted recency selection
   const swapFacePhoto = useCallback((faceIndex) => {
     if (lockedFacesRef.current.has(faceIndex)) return;
 
@@ -269,16 +271,51 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
       }
     }
 
-    let nextIdx = nextPhotoIndexRef.current;
-    let attempts = 0;
-    let candidate = currentPhotos[nextIdx % currentPhotos.length];
-    while (otherActiveIds.has(candidate?.id) && attempts < currentPhotos.length) {
-      nextIdx = (nextIdx + 1) % currentPhotos.length;
-      candidate = currentPhotos[nextIdx];
-      attempts++;
+    // Filter out photos currently active on any face
+    const eligiblePhotos = currentPhotos.filter((p) => !otherActiveIds.has(p.id));
+    if (eligiblePhotos.length === 0) return;
+
+    // Filter out photos shown very recently (anti-repetition buffer)
+    const recentHistory = recentHistoryRef.current;
+    let pool = eligiblePhotos.filter((p) => !recentHistory.includes(p.id));
+    if (pool.length < 6) {
+      // If history is too restrictive, relax it
+      pool = eligiblePhotos;
     }
-    nextPhotoIndexRef.current = (nextIdx + 1) % currentPhotos.length;
-    if (!candidate) return;
+
+    // Weighted Recency Selection:
+    // currentPhotos are ordered newest-first (created_at DESC).
+    // 60% probability -> top 25% newest photos
+    // 30% probability -> next 35%
+    // 10% probability -> remaining 40% deep archive
+    let candidate = null;
+    if (pool.length >= 8) {
+      const rand = Math.random();
+      if (rand < 0.60) {
+        // Top 25% (Newest)
+        const cutoff = Math.max(3, Math.floor(pool.length * 0.25));
+        const tier = pool.slice(0, cutoff);
+        candidate = tier[Math.floor(Math.random() * tier.length)];
+      } else if (rand < 0.90) {
+        // Next 35% (Mid Tier)
+        const start = Math.floor(pool.length * 0.25);
+        const end = Math.max(start + 3, Math.floor(pool.length * 0.60));
+        const tier = pool.slice(start, end);
+        candidate = tier[Math.floor(Math.random() * tier.length)];
+      } else {
+        // Full Pool (Deep Archive / Classic)
+        candidate = pool[Math.floor(Math.random() * pool.length)];
+      }
+    }
+
+    // Fallback if tier slice was empty
+    if (!candidate) {
+      candidate = pool[Math.floor(Math.random() * pool.length)] || eligiblePhotos[0];
+    }
+
+    // Update recent history queue (maintain max 20 IDs or 1/4 of total)
+    const maxHistory = Math.min(24, Math.max(6, Math.floor(currentPhotos.length * 0.25)));
+    recentHistoryRef.current = [candidate.id, ...recentHistory.filter((id) => id !== candidate.id)].slice(0, maxHistory);
 
     activePhotoIdsRef.current[faceIndex] = candidate.id;
     mat.userData.photo = candidate;
