@@ -89,6 +89,11 @@ export default function WallpaperView() {
   const [weatherCondition, setWeatherCondition] = useState(getStoredWeatherSetting());
   const [audioMode, setAudioMode] = useState('off'); // 'off' | 'beat' | 'mic'
 
+  const audioModeRef = useRef(audioMode);
+  useEffect(() => {
+    audioModeRef.current = audioMode;
+  }, [audioMode]);
+
   const weatherConditionRef = useRef(weatherCondition);
   const weather3DRef = useRef(null);
   const equalizerRingRef = useRef(null);
@@ -112,28 +117,50 @@ export default function WallpaperView() {
   const handleToggleAudio = useCallback(async () => {
     if (!audioVisRef.current) return;
     if (audioMode === 'off') {
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage(JSON.stringify({ action: 'setAudioMode', mode: 'system' }));
+        audioVisRef.current.mode = 'system';
+        audioModeRef.current = 'system';
+        setAudioMode('system');
+        return;
+      }
       // Attempt tab/system audio capture first (YouTube / Spotify sync)
       const ok = await audioVisRef.current.startSystemOrTabAudio();
       if (ok) {
+        audioModeRef.current = 'tab';
         setAudioMode('tab');
       } else {
         // Fallback to beat demo
         audioVisRef.current.startDemoBeat();
+        audioModeRef.current = 'beat';
         setAudioMode('beat');
       }
     } else if (audioMode === 'tab' || audioMode === 'system') {
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage(JSON.stringify({ action: 'setAudioMode', mode: 'beat' }));
+      }
       audioVisRef.current.startDemoBeat();
+      audioModeRef.current = 'beat';
       setAudioMode('beat');
     } else if (audioMode === 'beat') {
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage(JSON.stringify({ action: 'setAudioMode', mode: 'mic' }));
+      }
       const ok = await audioVisRef.current.startMic();
       if (ok) {
+        audioModeRef.current = 'mic';
         setAudioMode('mic');
       } else {
         audioVisRef.current.stop();
+        audioModeRef.current = 'off';
         setAudioMode('off');
       }
     } else {
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage(JSON.stringify({ action: 'setAudioMode', mode: 'off' }));
+      }
       audioVisRef.current.stop();
+      audioModeRef.current = 'off';
       setAudioMode('off');
     }
   }, [audioMode]);
@@ -551,36 +578,49 @@ export default function WallpaperView() {
       } else if (action === 'toggleAudio') {
         handleToggleAudio();
       } else if (action === 'systemAudio') {
-        if (audioVisRef.current) {
+        if (audioVisRef.current && audioModeRef.current === 'system') {
           audioVisRef.current.setExternalAudioData(
             data.bands,
             data.bass,
             data.mid,
             data.treble
           );
-          if (audioMode !== 'system') {
-            setAudioMode('system');
-          }
         }
       } else if (action === 'setAudioMode' && typeof data.mode === 'string') {
         const m = data.mode.toLowerCase();
         if (m === 'system') {
+          if (audioVisRef.current) {
+            audioVisRef.current.mode = 'system';
+          }
+          audioModeRef.current = 'system';
           setAudioMode('system');
         } else if (m === 'beat' && audioVisRef.current) {
           audioVisRef.current.startDemoBeat();
+          audioModeRef.current = 'beat';
           setAudioMode('beat');
         } else if (m === 'mic' && audioVisRef.current) {
           audioVisRef.current.startMic().then((ok) => {
-            if (ok) setAudioMode('mic');
-            else setAudioMode('off');
+            if (ok) {
+              audioModeRef.current = 'mic';
+              setAudioMode('mic');
+            } else {
+              audioModeRef.current = 'off';
+              setAudioMode('off');
+            }
           });
         } else if (m === 'tab' && audioVisRef.current) {
           audioVisRef.current.startSystemOrTabAudio().then((ok) => {
-            if (ok) setAudioMode('tab');
-            else setAudioMode('off');
+            if (ok) {
+              audioModeRef.current = 'tab';
+              setAudioMode('tab');
+            } else {
+              audioModeRef.current = 'off';
+              setAudioMode('off');
+            }
           });
         } else {
           audioVisRef.current?.stop();
+          audioModeRef.current = 'off';
           setAudioMode('off');
         }
       } else if (action === 'screenCrack') {
@@ -738,22 +778,24 @@ export default function WallpaperView() {
       if (audioVisRef.current) {
         audioVisRef.current.update();
 
+        const isVisualizerActive = audioModeRef.current !== 'off' && audioVisRef.current.mode !== 'off';
+
         // Scale punch on bass
-        const bassVal = audioVisRef.current.bass;
+        const bassVal = isVisualizerActive ? audioVisRef.current.bass : 0;
         const targetScale = 1.0 + bassVal * 0.35;
         if (cubeRef.current) {
           cubeRef.current.scale.set(targetScale, targetScale, targetScale);
         }
 
         // Modulate cursor spotlight and fill light with music
-        const midVal = audioVisRef.current.mid;
+        const midVal = isVisualizerActive ? audioVisRef.current.mid : 0;
         cursorLight.intensity = 3.5 + midVal * 4.5;
         fillLight.intensity = 0.9 + midVal * 1.2;
 
         if (equalizerRingRef.current) {
           equalizerRingRef.current.update(
             audioVisRef.current.frequencyBands,
-            audioVisRef.current.mode !== 'off'
+            isVisualizerActive
           );
         }
       }

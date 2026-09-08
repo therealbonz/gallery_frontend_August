@@ -103,7 +103,7 @@ export class AudioVisualizerManager {
   }
 
   setExternalAudioData(bands, bass, mid, treble) {
-    this.mode = 'system';
+    if (this.mode !== 'system') return;
     if (typeof bass === 'number') this.bass = bass;
     if (typeof mid === 'number') this.mid = mid;
     if (typeof treble === 'number') this.treble = treble;

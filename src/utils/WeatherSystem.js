@@ -367,7 +367,6 @@ export function createGlassRainOverlay(canvas) {
   let isRainEnabled = true;
 
   function addCrack(x, y) {
-    playGlassCrackSound();
     cracks.push(new Crack(x, y));
     if (cracks.length > 14) {
       cracks.shift();
@@ -473,53 +472,6 @@ export function createGlassRainOverlay(canvas) {
 // -------------------------------------------------------------
 // 3. Screen Glass Crack Simulation (Procedural Impact Fractures)
 // -------------------------------------------------------------
-function playGlassCrackSound() {
-  try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const now = ctx.currentTime;
-
-    // High frequency fracture snap
-    const bufferSize = Math.floor(ctx.sampleRate * 0.12);
-    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.015));
-    }
-    const noise = ctx.createBufferSource();
-    noise.buffer = buffer;
-
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'highpass';
-    filter.frequency.setValueAtTime(3600, now);
-
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.45, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
-
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(ctx.destination);
-    noise.start(now);
-
-    // Glass ping resonance
-    const osc = ctx.createOscillator();
-    const oscGain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(5200 + Math.random() * 1200, now);
-    osc.frequency.exponentialRampToValueAtTime(1400, now + 0.15);
-
-    oscGain.gain.setValueAtTime(0.18, now);
-    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
-
-    osc.connect(oscGain);
-    oscGain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.16);
-  } catch (e) {}
-}
-
 class Crack {
   constructor(x, y) {
     this.x = x;

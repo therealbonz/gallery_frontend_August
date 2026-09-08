@@ -674,20 +674,23 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
       if (audioVisRef.current) {
         audioVisRef.current.update();
 
+        const isActive = audioVisRef.current.mode !== 'off';
+
         // Scale punch on bass
-        const bassVal = audioVisRef.current.bass;
+        const bassVal = isActive ? audioVisRef.current.bass : 0;
         const targetScale = 1.0 + bassVal * 0.35;
         if (cubeRef.current) {
           cubeRef.current.scale.set(targetScale, targetScale, targetScale);
         }
 
         // Modulate directional light with music
-        dirLight1.intensity = 1.4 + audioVisRef.current.mid * 2.0;
+        const midVal = isActive ? audioVisRef.current.mid : 0;
+        dirLight1.intensity = 1.4 + midVal * 2.0;
 
         if (equalizerRingRef.current) {
           equalizerRingRef.current.update(
             audioVisRef.current.frequencyBands,
-            audioVisRef.current.mode !== 'off'
+            isActive
           );
         }
       }
