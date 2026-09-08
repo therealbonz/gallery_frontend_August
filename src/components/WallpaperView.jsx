@@ -184,6 +184,10 @@ export default function WallpaperView() {
   const faceUpdatedRef = useRef([false, false, false, false, false, false]);
   const textureCacheRef = useRef(new Map());
   const activeVideosByFaceRef = useRef([null, null, null, null, null, null]);
+  const activePhotoIdsRef = useRef([null, null, null, null, null, null]);
+  const lockedFacesRef = useRef(new Set());
+  const livePeerConnectionRef = useRef(null);
+  const liveStreamVideoRef = useRef(null);
 
   // Preload textures into cache for 0ms instantaneous face swapping
   useEffect(() => {
@@ -201,26 +205,64 @@ export default function WallpaperView() {
     });
   }, [photos]);
 
-  // Helper to slice photos per monitor/cube
+  // Helper to slice photos per monitor/cube guaranteeing NO DUPLICATES across faces
   const getPhotoForFace = useCallback((faceIdx) => {
     if (!photos || photos.length === 0) return null;
-    const offset = monitorIndex * 6;
-    if (photos.length > offset) {
-      return photos[(offset + faceIdx) % photos.length];
+    const assignedIds = new Set();
+    for (let i = 0; i < faceIdx; i++) {
+      if (activePhotoIdsRef.current[i]) {
+        assignedIds.add(activePhotoIdsRef.current[i]);
+      }
     }
-    return photos[faceIdx % photos.length];
+
+    const startIdx = (monitorIndex * 6 + faceIdx) % photos.length;
+    let candidateIndex = startIdx;
+    let attempts = 0;
+    while (assignedIds.has(photos[candidateIndex]?.id) && attempts < photos.length) {
+      candidateIndex = (candidateIndex + 1) % photos.length;
+      attempts++;
+    }
+
+    const chosen = photos[candidateIndex];
+    if (chosen) {
+      activePhotoIdsRef.current[faceIdx] = chosen.id;
+    }
+    return chosen;
   }, [photos, monitorIndex]);
 
   // Dynamic Face Swap: seamlessly swap face texture when it turns away to the back
   const swapFacePhoto = useCallback((faceIndex) => {
+    // If this face is currently streaming live Chrome video, never overwrite it!
+    if (lockedFacesRef.current.has(faceIndex)) return;
+
     const currentPhotos = photosRef.current;
     if (!currentPhotos || currentPhotos.length === 0) return;
     const mat = materialsRef.current[faceIndex];
     if (!mat) return;
 
-    const nextIdx = nextPhotoIndexRef.current;
-    const photo = currentPhotos[nextIdx % currentPhotos.length];
+    // Collect IDs currently visible on ALL OTHER 5 FACES of this cube to prevent any duplicates
+    const otherActiveIds = new Set();
+    for (let i = 0; i < 6; i++) {
+      if (i !== faceIndex && activePhotoIdsRef.current[i]) {
+        otherActiveIds.add(activePhotoIdsRef.current[i]);
+      }
+    }
+
+    // Find next candidate photo in gallery that is NOT currently visible on any other face
+    let nextIdx = nextPhotoIndexRef.current;
+    let attempts = 0;
+    let candidate = currentPhotos[nextIdx % currentPhotos.length];
+    while (otherActiveIds.has(candidate?.id) && attempts < currentPhotos.length) {
+      nextIdx = (nextIdx + 1) % currentPhotos.length;
+      candidate = currentPhotos[nextIdx];
+      attempts++;
+    }
     nextPhotoIndexRef.current = (nextIdx + 1) % currentPhotos.length;
+    if (!candidate) return;
+
+    activePhotoIdsRef.current[faceIndex] = candidate.id;
+    mat.userData = { photo: candidate };
+    const photo = candidate;
 
     // Clean up previous video on this face if any
     if (activeVideosByFaceRef.current[faceIndex]) {
@@ -312,6 +354,111 @@ export default function WallpaperView() {
     return () => clearInterval(interval);
   }, [fetchPhotos]);
 
+  // Handle Chrome Extension Live WebRTC Video Streaming
+  const handleWebRtcOffer = useCallback(async (data) => {
+    try {
+      const faceIndex = (data.faceIndex !== undefined && data.faceIndex >= 0 && data.faceIndex < 6) ? data.faceIndex : 0;
+      const sdp = data.sdp;
+
+      if (livePeerConnectionRef.current) {
+        try { livePeerConnectionRef.current.close(); } catch (e) {}
+      }
+
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      livePeerConnectionRef.current = pc;
+
+      pc.ontrack = (event) => {
+        console.log('[WallpaperView] Received Chrome live video track for face', faceIndex);
+        const stream = event.streams[0];
+
+        let video = liveStreamVideoRef.current;
+        if (!video) {
+          video = document.createElement('video');
+          video.autoplay = true;
+          video.muted = true;
+          video.playsInline = true;
+          liveStreamVideoRef.current = video;
+        }
+
+        video.srcObject = stream;
+        video.play().catch((e) => console.warn('Live video play warning:', e));
+
+        const videoTexture = new THREE.VideoTexture(video);
+        videoTexture.colorSpace = THREE.SRGBColorSpace;
+        videoTexture.minFilter = THREE.LinearFilter;
+        videoTexture.magFilter = THREE.LinearFilter;
+        videoTexture.generateMipmaps = false;
+
+        const mat = materialsRef.current[faceIndex];
+        if (mat) {
+          mat.map = videoTexture;
+          mat.needsUpdate = true;
+        }
+
+        // Lock face so random photo rotation won't overwrite it
+        lockedFacesRef.current.add(faceIndex);
+      };
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate && window.chrome?.webview) {
+          window.chrome.webview.postMessage({
+            action: 'webrtcCandidate',
+            faceIndex: faceIndex,
+            candidate: e.candidate
+          });
+        }
+      };
+
+      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      // Send answer back to host
+      if (window.chrome?.webview) {
+        window.chrome.webview.postMessage({
+          action: 'webrtcAnswer',
+          sdp: answer.sdp,
+          type: answer.type,
+          faceIndex: faceIndex
+        });
+      }
+    } catch (err) {
+      console.error('[WallpaperView] handleWebRtcOffer error:', err);
+    }
+  }, []);
+
+  const handleWebRtcCandidate = useCallback(async (data) => {
+    if (livePeerConnectionRef.current && data.candidate) {
+      try {
+        await livePeerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+      } catch (e) {
+        console.warn('[WallpaperView] addIceCandidate error:', e);
+      }
+    }
+  }, []);
+
+  const handleStopChromeStream = useCallback((data) => {
+    const faceIndex = data.faceIndex ?? 0;
+    lockedFacesRef.current.delete(faceIndex);
+
+    if (liveStreamVideoRef.current) {
+      try {
+        liveStreamVideoRef.current.pause();
+        liveStreamVideoRef.current.srcObject = null;
+      } catch (e) {}
+    }
+
+    if (livePeerConnectionRef.current) {
+      try {
+        livePeerConnectionRef.current.close();
+      } catch (e) {}
+      livePeerConnectionRef.current = null;
+    }
+
+    // Restore normal photo gallery texture on this face
+    swapFacePhoto(faceIndex);
+  }, [swapFacePhoto]);
+
   // Listen to postMessage from Windows C# host
   useEffect(() => {
     const handleMessage = (event) => {
@@ -387,6 +534,12 @@ export default function WallpaperView() {
         const cx = typeof data.clientX === 'number' ? data.clientX : window.innerWidth / 2;
         const cy = typeof data.clientY === 'number' ? data.clientY : window.innerHeight / 2;
         glassOverlayRef.current?.addCrack(cx, cy);
+      } else if (action === 'webrtcOffer') {
+        handleWebRtcOffer(data);
+      } else if (action === 'webrtcCandidate') {
+        handleWebRtcCandidate(data);
+      } else if (action === 'stopChromeStream') {
+        handleStopChromeStream(data);
       }
     };
 
@@ -400,7 +553,7 @@ export default function WallpaperView() {
         window.chrome.webview.removeEventListener('message', handleMessage);
       }
     };
-  }, [fetchPhotos, handleToggleAudio]);
+  }, [fetchPhotos, handleToggleAudio, swapFacePhoto]);
 
   // 2. Initialize Three.js Scene
   useEffect(() => {
@@ -791,6 +944,7 @@ export default function WallpaperView() {
           })
         );
       }
+      newMaterials[i].userData = { photo };
     }
 
     materialsRef.current = newMaterials;

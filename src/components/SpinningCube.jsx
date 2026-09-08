@@ -207,6 +207,10 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
   const faceUpdatedRef = useRef([false, false, false, false, false, false]);
   const textureCacheRef = useRef(new Map());
   const activeVideosByFaceRef = useRef([null, null, null, null, null, null]);
+  const activePhotoIdsRef = useRef([null, null, null, null, null, null]);
+  const lockedFacesRef = useRef(new Set());
+  const livePeerConnectionRef = useRef(null);
+  const liveStreamVideoRef = useRef(null);
 
   // Preload textures whenever photos list changes
   useEffect(() => {
@@ -250,16 +254,35 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
 
   // Dynamic Face Swap: swaps face texture when it turns away to the back
   const swapFacePhoto = useCallback((faceIndex) => {
+    if (lockedFacesRef.current.has(faceIndex)) return;
+
     const currentPhotos = photosRef.current;
     if (!currentPhotos || currentPhotos.length === 0) return;
     const mat = materialsRef.current[faceIndex];
     if (!mat) return;
 
-    const nextIdx = nextPhotoIndexRef.current;
-    const photo = currentPhotos[nextIdx % currentPhotos.length];
-    nextPhotoIndexRef.current = (nextIdx + 1) % currentPhotos.length;
+    // Collect IDs currently visible on ALL OTHER 5 FACES to guarantee NO DUPLICATES
+    const otherActiveIds = new Set();
+    for (let i = 0; i < 6; i++) {
+      if (i !== faceIndex && activePhotoIdsRef.current[i]) {
+        otherActiveIds.add(activePhotoIdsRef.current[i]);
+      }
+    }
 
-    mat.userData.photo = photo;
+    let nextIdx = nextPhotoIndexRef.current;
+    let attempts = 0;
+    let candidate = currentPhotos[nextIdx % currentPhotos.length];
+    while (otherActiveIds.has(candidate?.id) && attempts < currentPhotos.length) {
+      nextIdx = (nextIdx + 1) % currentPhotos.length;
+      candidate = currentPhotos[nextIdx];
+      attempts++;
+    }
+    nextPhotoIndexRef.current = (nextIdx + 1) % currentPhotos.length;
+    if (!candidate) return;
+
+    activePhotoIdsRef.current[faceIndex] = candidate.id;
+    mat.userData.photo = candidate;
+    const photo = candidate;
 
     // Clean up previous video on this face
     if (activeVideosByFaceRef.current[faceIndex]) {
@@ -333,9 +356,20 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
 
     const loader = new THREE.TextureLoader();
     const initialFaces = [];
+    const assignedIds = new Set();
 
     for (let i = 0; i < 6; i++) {
-      const photo = photosList.length > 0 ? photosList[i % photosList.length] : null;
+      let candidateIndex = i % photosList.length;
+      let attempts = 0;
+      while (assignedIds.has(photosList[candidateIndex]?.id) && attempts < photosList.length) {
+        candidateIndex = (candidateIndex + 1) % photosList.length;
+        attempts++;
+      }
+      const photo = photosList.length > 0 ? photosList[candidateIndex] : null;
+      if (photo) {
+        assignedIds.add(photo.id);
+        activePhotoIdsRef.current[i] = photo.id;
+      }
       initialFaces[i] = photo;
 
       if (materialsRef.current[i]) {
@@ -704,6 +738,133 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
   useEffect(() => {
     updateCubeMaterials(photos);
   }, [photos, updateCubeMaterials]);
+
+  // Handle Chrome Extension Live WebRTC Video Streaming in Web Gallery
+  const handleWebRtcOffer = useCallback(async (data) => {
+    try {
+      const faceIndex = (data.faceIndex !== undefined && data.faceIndex >= 0 && data.faceIndex < 6) ? data.faceIndex : 0;
+      const sdp = data.sdp;
+
+      if (livePeerConnectionRef.current) {
+        try { livePeerConnectionRef.current.close(); } catch (e) {}
+      }
+
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      livePeerConnectionRef.current = pc;
+
+      pc.ontrack = (event) => {
+        console.log('[SpinningCube] Received Chrome live video track on face', faceIndex);
+        const stream = event.streams[0];
+
+        let video = liveStreamVideoRef.current;
+        if (!video) {
+          video = document.createElement('video');
+          video.autoplay = true;
+          video.muted = true;
+          video.playsInline = true;
+          liveStreamVideoRef.current = video;
+        }
+
+        video.srcObject = stream;
+        video.play().catch((e) => console.warn('Live video play warning:', e));
+
+        const videoTexture = new THREE.VideoTexture(video);
+        videoTexture.colorSpace = THREE.SRGBColorSpace;
+        videoTexture.minFilter = THREE.LinearFilter;
+        videoTexture.magFilter = THREE.LinearFilter;
+
+        const mat = materialsRef.current[faceIndex];
+        if (mat) {
+          mat.map = videoTexture;
+          mat.needsUpdate = true;
+        }
+
+        lockedFacesRef.current.add(faceIndex);
+      };
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate && window.chrome?.webview) {
+          window.chrome.webview.postMessage({
+            action: 'webrtcCandidate',
+            faceIndex: faceIndex,
+            candidate: e.candidate
+          });
+        }
+      };
+
+      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      if (window.chrome?.webview) {
+        window.chrome.webview.postMessage({
+          action: 'webrtcAnswer',
+          sdp: answer.sdp,
+          type: answer.type,
+          faceIndex: faceIndex
+        });
+      } else if (window.opener) {
+        window.opener.postMessage({
+          action: 'webrtcAnswer',
+          sdp: answer.sdp,
+          type: answer.type,
+          faceIndex: faceIndex
+        }, '*');
+      }
+    } catch (err) {
+      console.error('[SpinningCube] handleWebRtcOffer error:', err);
+    }
+  }, []);
+
+  const handleWebRtcCandidate = useCallback(async (data) => {
+    if (livePeerConnectionRef.current && data.candidate) {
+      try {
+        await livePeerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+      } catch (e) {
+        console.warn('[SpinningCube] addIceCandidate error:', e);
+      }
+    }
+  }, []);
+
+  const handleStopChromeStream = useCallback((data) => {
+    const faceIndex = data.faceIndex ?? 0;
+    lockedFacesRef.current.delete(faceIndex);
+
+    if (liveStreamVideoRef.current) {
+      try {
+        liveStreamVideoRef.current.pause();
+        liveStreamVideoRef.current.srcObject = null;
+      } catch (e) {}
+    }
+
+    if (livePeerConnectionRef.current) {
+      try {
+        livePeerConnectionRef.current.close();
+      } catch (e) {}
+      livePeerConnectionRef.current = null;
+    }
+
+    swapFacePhoto(faceIndex);
+  }, [swapFacePhoto]);
+
+  useEffect(() => {
+    const handleMsg = (event) => {
+      let data = event.data;
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) {}
+      }
+      if (!data) return;
+      if (data.action === 'webrtcOffer') {
+        handleWebRtcOffer(data);
+      } else if (data.action === 'webrtcCandidate') {
+        handleWebRtcCandidate(data);
+      } else if (data.action === 'stopChromeStream') {
+        handleStopChromeStream(data);
+      }
+    };
+    window.addEventListener('message', handleMsg);
+    return () => window.removeEventListener('message', handleMsg);
+  }, [handleWebRtcOffer, handleWebRtcCandidate, handleStopChromeStream]);
 
   const activePhoto = currentFacePhotos[activeFace] || photos[activeFace];
 

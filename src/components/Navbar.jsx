@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, LogIn, UserPlus, LogOut, User, Sparkles, Monitor, Smartphone, Download } from 'lucide-react';
+import { Box, LogIn, UserPlus, LogOut, User, Sparkles, Monitor, Smartphone, Download, Cast } from 'lucide-react';
 
 export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
   return (
@@ -21,6 +21,15 @@ export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
         </a>
 
         <div className="d-flex align-items-center gap-2">
+          <a
+            href="/My3DCubeChromeExtension.zip"
+            download="My3DCubeChromeExtension.zip"
+            className="btn btn-sm btn-outline-warning d-flex align-items-center gap-1 rounded-pill px-3 text-warning border-warning"
+            title="Download Google Chrome Extension (.zip) - Cast YouTube/Twitch videos to 3D Cube Face"
+          >
+            <Cast size={15} />
+            <span className="d-none d-sm-inline">Chrome Plugin (.zip)</span>
+          </a>
           <a
             href="/api/v1/download/exe"
             download="My3DCubeWallpaper.exe"
