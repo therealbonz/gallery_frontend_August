@@ -401,11 +401,16 @@ export default function WallpaperView() {
 
       pc.onicecandidate = (e) => {
         if (e.candidate && window.chrome?.webview) {
-          window.chrome.webview.postMessage({
+          const candPayload = {
             action: 'webrtcCandidate',
             faceIndex: faceIndex,
             candidate: e.candidate
-          });
+          };
+          try {
+            window.chrome.webview.postMessage(JSON.stringify(candPayload));
+          } catch (err) {
+            window.chrome.webview.postMessage(candPayload);
+          }
         }
       };
 
@@ -415,12 +420,17 @@ export default function WallpaperView() {
 
       // Send answer back to host
       if (window.chrome?.webview) {
-        window.chrome.webview.postMessage({
+        const answerPayload = {
           action: 'webrtcAnswer',
           sdp: answer.sdp,
           type: answer.type,
           faceIndex: faceIndex
-        });
+        };
+        try {
+          window.chrome.webview.postMessage(JSON.stringify(answerPayload));
+        } catch (err) {
+          window.chrome.webview.postMessage(answerPayload);
+        }
       }
     } catch (err) {
       console.error('[WallpaperView] handleWebRtcOffer error:', err);

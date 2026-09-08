@@ -784,11 +784,16 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
 
       pc.onicecandidate = (e) => {
         if (e.candidate && window.chrome?.webview) {
-          window.chrome.webview.postMessage({
+          const candPayload = {
             action: 'webrtcCandidate',
             faceIndex: faceIndex,
             candidate: e.candidate
-          });
+          };
+          try {
+            window.chrome.webview.postMessage(JSON.stringify(candPayload));
+          } catch (err) {
+            window.chrome.webview.postMessage(candPayload);
+          }
         }
       };
 
@@ -797,12 +802,17 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
       await pc.setLocalDescription(answer);
 
       if (window.chrome?.webview) {
-        window.chrome.webview.postMessage({
+        const answerPayload = {
           action: 'webrtcAnswer',
           sdp: answer.sdp,
           type: answer.type,
           faceIndex: faceIndex
-        });
+        };
+        try {
+          window.chrome.webview.postMessage(JSON.stringify(answerPayload));
+        } catch (err) {
+          window.chrome.webview.postMessage(answerPayload);
+        }
       } else if (window.opener) {
         window.opener.postMessage({
           action: 'webrtcAnswer',
