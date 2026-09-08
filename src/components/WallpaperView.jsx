@@ -315,8 +315,14 @@ export default function WallpaperView() {
   // Listen to postMessage from Windows C# host
   useEffect(() => {
     const handleMessage = (event) => {
-      if (!event.data) return;
-      const { action, speed, spin, deltaX, deltaY, clientX, clientY } = event.data;
+      let data = event.data;
+      if (typeof data === 'string') {
+        try {
+          data = JSON.parse(data);
+        } catch (e) {}
+      }
+      if (!data) return;
+      const { action, speed, spin, deltaX, deltaY, clientX, clientY } = data;
       if (action === 'refresh') {
         fetchPhotos(false);
       } else if (action === 'setSpeed' && typeof speed === 'number') {
@@ -338,8 +344,8 @@ export default function WallpaperView() {
             y: -(clientY / window.innerHeight) * 2 + 1
           };
         }
-      } else if (action === 'setWeather' && typeof event.data.weather === 'string') {
-        const w = event.data.weather.toLowerCase();
+      } else if (action === 'setWeather' && typeof data.weather === 'string') {
+        const w = data.weather.toLowerCase();
         setWeatherCondition(w);
         setStoredWeatherSetting(w);
       } else if (action === 'toggleAudio') {
@@ -347,17 +353,17 @@ export default function WallpaperView() {
       } else if (action === 'systemAudio') {
         if (audioVisRef.current) {
           audioVisRef.current.setExternalAudioData(
-            event.data.bands,
-            event.data.bass,
-            event.data.mid,
-            event.data.treble
+            data.bands,
+            data.bass,
+            data.mid,
+            data.treble
           );
           if (audioMode !== 'system') {
             setAudioMode('system');
           }
         }
-      } else if (action === 'setAudioMode' && typeof event.data.mode === 'string') {
-        const m = event.data.mode.toLowerCase();
+      } else if (action === 'setAudioMode' && typeof data.mode === 'string') {
+        const m = data.mode.toLowerCase();
         if (m === 'system') {
           setAudioMode('system');
         } else if (m === 'beat' && audioVisRef.current) {
@@ -378,14 +384,22 @@ export default function WallpaperView() {
           setAudioMode('off');
         }
       } else if (action === 'screenCrack') {
-        const cx = typeof event.data.clientX === 'number' ? event.data.clientX : window.innerWidth / 2;
-        const cy = typeof event.data.clientY === 'number' ? event.data.clientY : window.innerHeight / 2;
+        const cx = typeof data.clientX === 'number' ? data.clientX : window.innerWidth / 2;
+        const cy = typeof data.clientY === 'number' ? data.clientY : window.innerHeight / 2;
         glassOverlayRef.current?.addCrack(cx, cy);
       }
     };
 
     window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.addEventListener('message', handleMessage);
+    }
+    return () => {
+      window.removeEventListener('message', handleMessage);
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.removeEventListener('message', handleMessage);
+      }
+    };
   }, [fetchPhotos, handleToggleAudio]);
 
   // 2. Initialize Three.js Scene
@@ -520,7 +534,7 @@ export default function WallpaperView() {
 
         // Scale punch on bass
         const bassVal = audioVisRef.current.bass;
-        const targetScale = 1.0 + bassVal * 0.16;
+        const targetScale = 1.0 + bassVal * 0.35;
         if (cubeRef.current) {
           cubeRef.current.scale.set(targetScale, targetScale, targetScale);
         }

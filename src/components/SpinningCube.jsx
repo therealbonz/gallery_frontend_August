@@ -642,7 +642,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
 
         // Scale punch on bass
         const bassVal = audioVisRef.current.bass;
-        const targetScale = 1.0 + bassVal * 0.16;
+        const targetScale = 1.0 + bassVal * 0.35;
         if (cubeRef.current) {
           cubeRef.current.scale.set(targetScale, targetScale, targetScale);
         }

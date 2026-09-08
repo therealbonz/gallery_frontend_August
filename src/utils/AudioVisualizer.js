@@ -26,8 +26,10 @@ export class AudioVisualizerManager {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       this.audioCtx = new AudioContextClass();
       this.analyser = this.audioCtx.createAnalyser();
-      this.analyser.fftSize = 256; // 128 bins
-      this.analyser.smoothingTimeConstant = 0.8;
+      this.analyser.fftSize = 512; // 256 bins for sharp bass separation
+      this.analyser.smoothingTimeConstant = 0.76;
+      this.analyser.minDecibels = -85;
+      this.analyser.maxDecibels = -25;
       this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
     }
     if (this.audioCtx.state === 'suspended') {
@@ -73,12 +75,15 @@ export class AudioVisualizerManager {
       const audioTracks = stream.getAudioTracks();
       if (!audioTracks || audioTracks.length === 0) {
         console.warn('No audio track shared. User must check "Share audio" when picking tab or screen.');
+        alert('Tip: When selecting a browser tab (like YouTube or Spotify), make sure the "Also share tab audio" checkbox is checked!');
         stream.getTracks().forEach((t) => t.stop());
         return false;
       }
 
-      // Immediately stop video track to save 100% CPU/GPU overhead
-      stream.getVideoTracks().forEach((t) => t.stop());
+      // Disable video rendering so it uses 0 CPU/GPU, but DO NOT stop it (stopping video terminates capture in Chromium)
+      stream.getVideoTracks().forEach((t) => {
+        t.enabled = false;
+      });
 
       // If user stops sharing from browser bar
       audioTracks[0].onended = () => {
@@ -262,37 +267,37 @@ export class AudioVisualizerManager {
 
     this.analyser.getByteFrequencyData(this.dataArray);
 
-    // Bins: 128 total across 0 to ~22kHz
-    // Sub-bass & Bass: bins 1 to 5 (20 - 150 Hz)
+    // Bins: 256 total across 0 to ~24kHz (each bin is ~93.75 Hz)
+    // Sub-bass & Bass: Bins 0 to 6 (0 - 280 Hz) - Includes kick drum fundamental!
     let rawBass = 0;
-    for (let i = 1; i <= 5; i++) rawBass += this.dataArray[i];
-    rawBass = rawBass / (5 * 255);
+    for (let i = 0; i <= 6; i++) rawBass += this.dataArray[i];
+    rawBass = Math.min(1.0, (rawBass / (7 * 255)) * 1.6);
 
-    // Mids: bins 6 to 22 (150 - 2000 Hz)
+    // Mids: Bins 7 to 32 (~280 - 3,000 Hz) - Vocals, snare, synth chords
     let rawMid = 0;
-    for (let i = 6; i <= 22; i++) rawMid += this.dataArray[i];
-    rawMid = rawMid / (17 * 255);
+    for (let i = 7; i <= 32; i++) rawMid += this.dataArray[i];
+    rawMid = Math.min(1.0, (rawMid / (26 * 255)) * 1.4);
 
-    // Treble: bins 23 to 60 (2000 - 10000 Hz)
+    // Treble: Bins 33 to 90 (~3,000 - 8,500 Hz) - Hi-hats, cymbals, air
     let rawTreble = 0;
-    for (let i = 23; i <= 60; i++) rawTreble += this.dataArray[i];
-    rawTreble = rawTreble / (38 * 255);
+    for (let i = 33; i <= 90; i++) rawTreble += this.dataArray[i];
+    rawTreble = Math.min(1.0, (rawTreble / (58 * 255)) * 1.6);
 
-    // Exponential punch curve
-    this.bass = Math.max(rawBass * 1.3, this.bass * 0.85);
-    this.mid = rawMid * 1.1;
-    this.treble = rawTreble * 1.2;
+    // Punchy bass attack with smooth release
+    this.bass = Math.max(rawBass, this.bass * 0.80);
+    this.mid = rawMid;
+    this.treble = rawTreble;
     this.overall = (this.bass + this.mid + this.treble) / 3;
 
-    // 32 Frequency bars
-    const binStep = Math.floor(64 / 32);
+    // 32 Frequency bars across first 96 bins (3 bins per bar)
     for (let i = 0; i < 32; i++) {
       let sum = 0;
-      for (let b = 0; b < binStep; b++) {
-        sum += this.dataArray[i * binStep + b] || 0;
+      for (let b = 0; b < 3; b++) {
+        sum += this.dataArray[i * 3 + b] || 0;
       }
-      const val = sum / (binStep * 255);
-      this.frequencyBands[i] = Math.max(val, this.frequencyBands[i] * 0.82);
+      const tilt = 1.0 + (i / 32) * 1.5;
+      const val = Math.min(1.0, (sum / (3 * 255)) * 1.5 * tilt);
+      this.frequencyBands[i] = Math.max(val, this.frequencyBands[i] * 0.76);
     }
   }
 }
@@ -348,10 +353,10 @@ export function createEqualizerRing(scene) {
 
     for (let i = 0; i < BAR_COUNT; i++) {
       const val = frequencyBands[i] || 0;
-      const height = Math.max(0.06, val * 1.8);
+      const height = Math.max(0.06, val * 3.2);
       bars[i].scale.y = height;
       bars[i].position.y = height / 2;
-      bars[i].material.emissiveIntensity = 0.5 + val * 1.5;
+      bars[i].material.emissiveIntensity = 0.5 + val * 2.0;
     }
   }
 
