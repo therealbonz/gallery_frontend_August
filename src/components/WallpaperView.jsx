@@ -384,7 +384,8 @@ export default function WallpaperView() {
   // Handle Chrome Extension Live WebRTC Video Streaming
   const handleWebRtcOffer = useCallback(async (data) => {
     try {
-      const faceIndex = (data.faceIndex !== undefined && data.faceIndex >= 0 && data.faceIndex < 6) ? data.faceIndex : 0;
+      const faceIndex = (data.faceIndex !== undefined && data.faceIndex >= 0 && data.faceIndex < 6) ? data.faceIndex : -1;
+      const allFaces = data.allFaces !== false;
       const sdp = data.sdp;
 
       if (livePeerConnectionRef.current) {
@@ -399,7 +400,7 @@ export default function WallpaperView() {
       };
 
       pc.ontrack = (event) => {
-        console.log('[WallpaperView] Received Chrome live video track for face', faceIndex);
+        console.log('[WallpaperView] Received Chrome live video track (allFaces:', allFaces, ')');
         const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
 
         let video = liveStreamVideoRef.current;
@@ -431,10 +432,19 @@ export default function WallpaperView() {
         videoTexture.generateMipmaps = false;
 
         const updateMaterial = () => {
-          const mat = materialsRef.current[faceIndex];
-          if (mat) {
-            mat.map = videoTexture;
-            mat.needsUpdate = true;
+          if (allFaces) {
+            materialsRef.current.forEach((mat) => {
+              if (mat) {
+                mat.map = videoTexture;
+                mat.needsUpdate = true;
+              }
+            });
+          } else if (faceIndex >= 0) {
+            const mat = materialsRef.current[faceIndex];
+            if (mat) {
+              mat.map = videoTexture;
+              mat.needsUpdate = true;
+            }
           }
         };
 
@@ -443,8 +453,14 @@ export default function WallpaperView() {
         video.ontimeupdate = updateMaterial;
         updateMaterial();
 
-        // Lock face so random photo rotation won't overwrite it
-        lockedFacesRef.current.add(faceIndex);
+        // Lock faces so random photo rotation won't overwrite them
+        if (allFaces) {
+          for (let i = 0; i < 6; i++) {
+            lockedFacesRef.current.add(i);
+          }
+        } else if (faceIndex >= 0) {
+          lockedFacesRef.current.add(faceIndex);
+        }
       };
 
       pc.onicecandidate = (e) => {
@@ -514,8 +530,14 @@ export default function WallpaperView() {
   }, []);
 
   const handleStopChromeStream = useCallback((data) => {
-    const faceIndex = data.faceIndex ?? 0;
-    lockedFacesRef.current.delete(faceIndex);
+    const faceIndex = data?.faceIndex ?? -1;
+    const stopAll = faceIndex === -1 || faceIndex === 'all' || data?.allFaces !== false || lockedFacesRef.current.size >= 6;
+
+    if (stopAll) {
+      lockedFacesRef.current.clear();
+    } else {
+      lockedFacesRef.current.delete(faceIndex);
+    }
 
     if (liveStreamVideoRef.current) {
       try {
@@ -535,8 +557,14 @@ export default function WallpaperView() {
       livePeerConnectionRef.current = null;
     }
 
-    // Restore normal photo gallery texture on this face
-    swapFacePhoto(faceIndex);
+    // Restore normal photo gallery textures
+    if (stopAll) {
+      for (let i = 0; i < 6; i++) {
+        swapFacePhoto(i);
+      }
+    } else {
+      swapFacePhoto(faceIndex);
+    }
   }, [swapFacePhoto]);
 
   // Listen to postMessage from Windows C# host
