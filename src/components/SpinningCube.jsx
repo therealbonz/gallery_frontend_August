@@ -697,6 +697,16 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
         weather3DRef.current.update(0.016, weatherConditionRef.current);
       }
 
+      // Keep live streaming video texture fresh on each animation frame
+      if (liveStreamVideoRef.current && liveStreamVideoRef.current.readyState >= 2) {
+        lockedFacesRef.current.forEach((faceIdx) => {
+          const mat = materialsRef.current[faceIdx];
+          if (mat && mat.map) {
+            mat.map.needsUpdate = true;
+          }
+        });
+      }
+
       renderer.render(scene, camera);
     };
     animate();
@@ -754,7 +764,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
 
       pc.ontrack = (event) => {
         console.log('[SpinningCube] Received Chrome live video track on face', faceIndex);
-        const stream = event.streams[0];
+        const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
 
         let video = liveStreamVideoRef.current;
         if (!video) {
@@ -762,6 +772,16 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
           video.autoplay = true;
           video.muted = true;
           video.playsInline = true;
+          video.setAttribute('playsinline', '');
+          video.setAttribute('webkit-playsinline', '');
+          video.style.position = 'fixed';
+          video.style.top = '-9999px';
+          video.style.left = '-9999px';
+          video.style.width = '320px';
+          video.style.height = '240px';
+          video.style.opacity = '0.001';
+          video.style.pointerEvents = 'none';
+          document.body.appendChild(video);
           liveStreamVideoRef.current = video;
         }
 
@@ -772,12 +792,20 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
         videoTexture.colorSpace = THREE.SRGBColorSpace;
         videoTexture.minFilter = THREE.LinearFilter;
         videoTexture.magFilter = THREE.LinearFilter;
+        videoTexture.generateMipmaps = false;
 
-        const mat = materialsRef.current[faceIndex];
-        if (mat) {
-          mat.map = videoTexture;
-          mat.needsUpdate = true;
-        }
+        const updateMaterial = () => {
+          const mat = materialsRef.current[faceIndex];
+          if (mat) {
+            mat.map = videoTexture;
+            mat.needsUpdate = true;
+          }
+        };
+
+        video.onloadeddata = updateMaterial;
+        video.onplaying = updateMaterial;
+        video.ontimeupdate = updateMaterial;
+        updateMaterial();
 
         lockedFacesRef.current.add(faceIndex);
       };
@@ -801,10 +829,28 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
+      // Wait briefly for local host candidates to gather so answer SDP contains host routes
+      await new Promise((resolve) => {
+        if (pc.iceGatheringState === 'complete') {
+          resolve();
+        } else {
+          const check = () => {
+            if (pc.iceGatheringState === 'complete') {
+              pc.removeEventListener('icegatheringstatechange', check);
+              resolve();
+            }
+          };
+          pc.addEventListener('icegatheringstatechange', check);
+          setTimeout(resolve, 200);
+        }
+      });
+
+      const answerSdp = pc.localDescription?.sdp || answer.sdp;
+
       if (window.chrome?.webview) {
         const answerPayload = {
           action: 'webrtcAnswer',
-          sdp: answer.sdp,
+          sdp: answerSdp,
           type: answer.type,
           faceIndex: faceIndex
         };
@@ -816,7 +862,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
       } else if (window.opener) {
         window.opener.postMessage({
           action: 'webrtcAnswer',
-          sdp: answer.sdp,
+          sdp: answerSdp,
           type: answer.type,
           faceIndex: faceIndex
         }, '*');
@@ -844,7 +890,11 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
       try {
         liveStreamVideoRef.current.pause();
         liveStreamVideoRef.current.srcObject = null;
+        if (liveStreamVideoRef.current.parentElement) {
+          liveStreamVideoRef.current.parentElement.removeChild(liveStreamVideoRef.current);
+        }
       } catch (e) {}
+      liveStreamVideoRef.current = null;
     }
 
     if (livePeerConnectionRef.current) {

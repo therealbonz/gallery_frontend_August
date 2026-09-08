@@ -367,9 +367,13 @@ export default function WallpaperView() {
       const pc = new RTCPeerConnection({ iceServers: [] });
       livePeerConnectionRef.current = pc;
 
+      pc.onconnectionstatechange = () => {
+        console.log('[WallpaperView] WebRTC Connection State:', pc.connectionState);
+      };
+
       pc.ontrack = (event) => {
         console.log('[WallpaperView] Received Chrome live video track for face', faceIndex);
-        const stream = event.streams[0];
+        const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
 
         let video = liveStreamVideoRef.current;
         if (!video) {
@@ -377,6 +381,16 @@ export default function WallpaperView() {
           video.autoplay = true;
           video.muted = true;
           video.playsInline = true;
+          video.setAttribute('playsinline', '');
+          video.setAttribute('webkit-playsinline', '');
+          video.style.position = 'fixed';
+          video.style.top = '-9999px';
+          video.style.left = '-9999px';
+          video.style.width = '320px';
+          video.style.height = '240px';
+          video.style.opacity = '0.001';
+          video.style.pointerEvents = 'none';
+          document.body.appendChild(video);
           liveStreamVideoRef.current = video;
         }
 
@@ -389,11 +403,18 @@ export default function WallpaperView() {
         videoTexture.magFilter = THREE.LinearFilter;
         videoTexture.generateMipmaps = false;
 
-        const mat = materialsRef.current[faceIndex];
-        if (mat) {
-          mat.map = videoTexture;
-          mat.needsUpdate = true;
-        }
+        const updateMaterial = () => {
+          const mat = materialsRef.current[faceIndex];
+          if (mat) {
+            mat.map = videoTexture;
+            mat.needsUpdate = true;
+          }
+        };
+
+        video.onloadeddata = updateMaterial;
+        video.onplaying = updateMaterial;
+        video.ontimeupdate = updateMaterial;
+        updateMaterial();
 
         // Lock face so random photo rotation won't overwrite it
         lockedFacesRef.current.add(faceIndex);
@@ -418,11 +439,29 @@ export default function WallpaperView() {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
+      // Wait briefly for local host candidates to gather so answer SDP contains host routes
+      await new Promise((resolve) => {
+        if (pc.iceGatheringState === 'complete') {
+          resolve();
+        } else {
+          const check = () => {
+            if (pc.iceGatheringState === 'complete') {
+              pc.removeEventListener('icegatheringstatechange', check);
+              resolve();
+            }
+          };
+          pc.addEventListener('icegatheringstatechange', check);
+          setTimeout(resolve, 200);
+        }
+      });
+
+      const answerSdp = pc.localDescription?.sdp || answer.sdp;
+
       // Send answer back to host
       if (window.chrome?.webview) {
         const answerPayload = {
           action: 'webrtcAnswer',
-          sdp: answer.sdp,
+          sdp: answerSdp,
           type: answer.type,
           faceIndex: faceIndex
         };
@@ -455,7 +494,11 @@ export default function WallpaperView() {
       try {
         liveStreamVideoRef.current.pause();
         liveStreamVideoRef.current.srcObject = null;
+        if (liveStreamVideoRef.current.parentElement) {
+          liveStreamVideoRef.current.parentElement.removeChild(liveStreamVideoRef.current);
+        }
       } catch (e) {}
+      liveStreamVideoRef.current = null;
     }
 
     if (livePeerConnectionRef.current) {
@@ -718,6 +761,16 @@ export default function WallpaperView() {
       // Weather 3D updates
       if (weather3DRef.current) {
         weather3DRef.current.update(delta, weatherConditionRef.current);
+      }
+
+      // Keep live streaming video texture continuously fresh on each animation frame
+      if (liveStreamVideoRef.current && liveStreamVideoRef.current.readyState >= 2) {
+        lockedFacesRef.current.forEach((faceIdx) => {
+          const mat = materialsRef.current[faceIdx];
+          if (mat && mat.map) {
+            mat.map.needsUpdate = true;
+          }
+        });
       }
 
       if (cubeRef.current) {
