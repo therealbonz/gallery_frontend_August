@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, LogIn, UserPlus, LogOut, User, Sparkles, Monitor, Smartphone, Download, Cast } from 'lucide-react';
+import { Box, LogIn, UserPlus, LogOut, User, Sparkles, Monitor, Smartphone, Download, Cast, Terminal } from 'lucide-react';
 
 export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
   return (
@@ -38,6 +38,15 @@ export default function Navbar({ currentUser, onOpenAuth, onLogout }) {
           >
             <Download size={15} />
             <span className="d-none d-sm-inline">Windows App (.exe)</span>
+          </a>
+          <a
+            href="/api/v1/download/linux"
+            download="My3DCube-Linux.tar.gz"
+            className="btn btn-sm btn-outline-light d-flex align-items-center gap-1 rounded-pill px-3"
+            title="Download Linux Desktop Live Wallpaper App (.tar.gz)"
+          >
+            <Terminal size={15} />
+            <span className="d-none d-sm-inline">Linux App (.tar.gz)</span>
           </a>
           <a
             href="/api/v1/download/apk"
