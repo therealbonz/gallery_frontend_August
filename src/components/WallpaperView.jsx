@@ -421,7 +421,7 @@ export default function WallpaperView() {
   }, [fetchPhotos]);
 
   // Handle Chrome Extension Live WebRTC Video Streaming
-  const handleWebRtcOffer = useCallback(async (data) => {
+  const handleWebRtcOffer = useCallback(async (data, signalSender) => {
     try {
       const faceIndex = (data.faceIndex !== undefined && data.faceIndex >= 0 && data.faceIndex < 6) ? data.faceIndex : -1;
       const allFaces = data.allFaces !== false;
@@ -431,7 +431,12 @@ export default function WallpaperView() {
         try { livePeerConnectionRef.current.close(); } catch (e) {}
       }
 
-      const pc = new RTCPeerConnection({ iceServers: [] });
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      });
       livePeerConnectionRef.current = pc;
 
       pc.onconnectionstatechange = () => {
@@ -503,16 +508,21 @@ export default function WallpaperView() {
       };
 
       pc.onicecandidate = (e) => {
-        if (e.candidate && window.chrome?.webview) {
-          const candPayload = {
-            action: 'webrtcCandidate',
-            faceIndex: faceIndex,
-            candidate: e.candidate
-          };
-          try {
-            window.chrome.webview.postMessage(JSON.stringify(candPayload));
-          } catch (err) {
-            window.chrome.webview.postMessage(candPayload);
+        if (e.candidate) {
+          if (typeof signalSender === 'function') {
+            signalSender('candidate', e.candidate);
+          }
+          if (window.chrome?.webview) {
+            const candPayload = {
+              action: 'webrtcCandidate',
+              faceIndex: faceIndex,
+              candidate: e.candidate
+            };
+            try {
+              window.chrome.webview.postMessage(JSON.stringify(candPayload));
+            } catch (err) {
+              window.chrome.webview.postMessage(candPayload);
+            }
           }
         }
       };
@@ -540,6 +550,9 @@ export default function WallpaperView() {
       const answerSdp = pc.localDescription?.sdp || answer.sdp;
 
       // Send answer back to host
+      if (typeof signalSender === 'function') {
+        signalSender('answer', { sdp: answerSdp, type: answer.type, faceIndex });
+      }
       if (window.chrome?.webview) {
         const answerPayload = {
           action: 'webrtcAnswer',
@@ -605,6 +618,103 @@ export default function WallpaperView() {
       swapFacePhoto(faceIndex);
     }
   }, [swapFacePhoto]);
+
+  // Network-wide Chrome Video Cast Listener & WebRTC Subscriber
+  useEffect(() => {
+    const clientId = 'client_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now().toString(36);
+    let activeStreamId = null;
+    let signalPollInterval = null;
+    let isConnected = false;
+
+    const sendSignal = async (type, payload) => {
+      try {
+        await fetch('/api/v1/stream/signal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            target: 'broadcaster',
+            sender_id: clientId,
+            type,
+            payload
+          })
+        });
+      } catch (e) {}
+    };
+
+    const startSignalPolling = () => {
+      if (signalPollInterval) clearInterval(signalPollInterval);
+      signalPollInterval = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/v1/stream/signals?receiver_id=${clientId}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && Array.isArray(data.signals) && data.signals.length > 0) {
+              for (const sig of data.signals) {
+                if (sig.type === 'offer' && sig.payload) {
+                  console.log('[WallpaperView] Received Network WebRTC Offer from broadcaster');
+                  isConnected = true;
+                  await handleWebRtcOffer(sig.payload, (st, pl) => sendSignal(st, pl));
+                } else if (sig.type === 'candidate' && sig.payload) {
+                  handleWebRtcCandidate({ candidate: sig.payload });
+                } else if (sig.type === 'stop') {
+                  console.log('[WallpaperView] Broadcaster signaled stop');
+                  isConnected = false;
+                  activeStreamId = null;
+                  handleStopChromeStream({ allFaces: true });
+                }
+              }
+            }
+          }
+        } catch (e) {}
+      }, 700);
+    };
+
+    const stopSignalPolling = () => {
+      if (signalPollInterval) {
+        clearInterval(signalPollInterval);
+        signalPollInterval = null;
+      }
+    };
+
+    const checkStreamStatus = async () => {
+      try {
+        const res = await fetch('/api/v1/stream/status');
+        if (res.ok) {
+          const status = await res.json();
+          if (status && status.active && status.stream_id) {
+            if (activeStreamId !== status.stream_id) {
+              console.log('[WallpaperView] Discovered active network cast:', status.stream_id, status.title);
+              activeStreamId = status.stream_id;
+              // Request to join broadcast
+              await sendSignal('join', { clientId, faceIndex: status.face_index, allFaces: status.all_faces });
+              startSignalPolling();
+            }
+          } else {
+            // Stream inactive
+            if (activeStreamId || isConnected) {
+              console.log('[WallpaperView] Network cast is no longer active. Reverting to photo gallery.');
+              activeStreamId = null;
+              isConnected = false;
+              stopSignalPolling();
+              handleStopChromeStream({ allFaces: true });
+            }
+          }
+        }
+      } catch (e) {}
+    };
+
+    // Poll for network cast status every 2 seconds
+    const statusInterval = setInterval(checkStreamStatus, 2000);
+    checkStreamStatus();
+
+    return () => {
+      clearInterval(statusInterval);
+      stopSignalPolling();
+      if (isConnected) {
+        sendSignal('leave', {}).catch(() => {});
+      }
+    };
+  }, [handleWebRtcOffer, handleWebRtcCandidate, handleStopChromeStream]);
 
   const handleStartWindowStream = useCallback((data) => {
     try {
