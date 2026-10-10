@@ -217,21 +217,45 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
   const isWindowStreamingRef = useRef(false);
   const recentHistoryRef = useRef([]); // Anti-repetition LRU queue of recently featured photo IDs
 
-  // Preload textures whenever photos list changes
+  const MAX_TEXTURE_CACHE = 24;
+
+  const evictOldestTextures = useCallback(() => {
+    const cache = textureCacheRef.current;
+    if (cache.size <= MAX_TEXTURE_CACHE) return;
+    const activeIds = new Set(activePhotoIdsRef.current.filter(Boolean));
+    for (const [id, tex] of cache.entries()) {
+      if (cache.size <= MAX_TEXTURE_CACHE) break;
+      if (!activeIds.has(id)) {
+        cache.delete(id);
+        try {
+          tex.dispose();
+        } catch (e) {}
+      }
+    }
+  }, []);
+
+  // Preload only a bounded initial working set (max 12), NOT all 1,000+ photos to prevent GPU OOM crash
   useEffect(() => {
     if (!photos || photos.length === 0) return;
     const loader = new THREE.TextureLoader();
-    photos.forEach((photo) => {
+    const initialPool = photos.slice(0, 12);
+    initialPool.forEach((photo) => {
       if (photo && photo.image_url && photo.media_type !== 'video' && !textureCacheRef.current.has(photo.id)) {
-        loader.load(photo.image_url, (tex) => {
-          tex.colorSpace = THREE.SRGBColorSpace;
-          tex.generateMipmaps = true;
-          tex.minFilter = THREE.LinearMipmapLinearFilter;
-          textureCacheRef.current.set(photo.id, tex);
-        });
+        loader.load(
+          photo.image_url,
+          (tex) => {
+            tex.colorSpace = THREE.SRGBColorSpace;
+            tex.generateMipmaps = true;
+            tex.minFilter = THREE.LinearMipmapLinearFilter;
+            textureCacheRef.current.set(photo.id, tex);
+            evictOldestTextures();
+          },
+          undefined,
+          () => {}
+        );
       }
     });
-  }, [photos]);
+  }, [photos, evictOldestTextures]);
 
   // Cleanup active video elements
   const cleanupVideos = useCallback(() => {
@@ -367,6 +391,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
               tex.generateMipmaps = true;
               tex.minFilter = THREE.LinearMipmapLinearFilter;
               textureCacheRef.current.set(photo.id, tex);
+              evictOldestTextures();
               mat.map = tex;
               mat.needsUpdate = true;
             },
@@ -388,7 +413,7 @@ export default function SpinningCube({ photos = [], onSelectPhoto, focusedFaceIn
       next[faceIndex] = photo;
       return next;
     });
-  }, []);
+  }, [evictOldestTextures]);
 
   // Update materials when photos/videos change
   const updateCubeMaterials = useCallback((photosList) => {

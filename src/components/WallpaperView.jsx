@@ -221,21 +221,45 @@ export default function WallpaperView() {
   const isWindowStreamingRef = useRef(false);
   const recentHistoryRef = useRef([]); // Anti-repetition LRU queue of recently featured photo IDs
 
-  // Preload textures into cache for 0ms instantaneous face swapping
+  const MAX_TEXTURE_CACHE = 24;
+
+  const evictOldestTextures = useCallback(() => {
+    const cache = textureCacheRef.current;
+    if (cache.size <= MAX_TEXTURE_CACHE) return;
+    const activeIds = new Set(activePhotoIdsRef.current.filter(Boolean));
+    for (const [id, tex] of cache.entries()) {
+      if (cache.size <= MAX_TEXTURE_CACHE) break;
+      if (!activeIds.has(id)) {
+        cache.delete(id);
+        try {
+          tex.dispose();
+        } catch (e) {}
+      }
+    }
+  }, []);
+
+  // Preload only a bounded initial working set (max 12), NOT all 1,000+ photos to prevent GPU OOM crash
   useEffect(() => {
     if (!photos || photos.length === 0) return;
     const loader = new THREE.TextureLoader();
-    photos.forEach((photo) => {
+    const initialPool = photos.slice(0, 12);
+    initialPool.forEach((photo) => {
       if (photo && photo.image_url && photo.media_type !== 'video' && !textureCacheRef.current.has(photo.id)) {
-        loader.load(photo.image_url, (tex) => {
-          tex.colorSpace = THREE.SRGBColorSpace;
-          tex.generateMipmaps = true;
-          tex.minFilter = THREE.LinearMipmapLinearFilter;
-          textureCacheRef.current.set(photo.id, tex);
-        });
+        loader.load(
+          photo.image_url,
+          (tex) => {
+            tex.colorSpace = THREE.SRGBColorSpace;
+            tex.generateMipmaps = true;
+            tex.minFilter = THREE.LinearMipmapLinearFilter;
+            textureCacheRef.current.set(photo.id, tex);
+            evictOldestTextures();
+          },
+          undefined,
+          () => {}
+        );
       }
     });
-  }, [photos]);
+  }, [photos, evictOldestTextures]);
 
   // Helper to slice photos per monitor/cube guaranteeing NO DUPLICATES across faces
   const getPhotoForFace = useCallback((faceIdx) => {
@@ -373,6 +397,7 @@ export default function WallpaperView() {
               tex.generateMipmaps = true;
               tex.minFilter = THREE.LinearMipmapLinearFilter;
               textureCacheRef.current.set(photo.id, tex);
+              evictOldestTextures();
               mat.map = tex;
               mat.needsUpdate = true;
             },
@@ -388,7 +413,7 @@ export default function WallpaperView() {
       mat.map = createPlaceholderTexture(faceIndex, monitorIndex);
       mat.needsUpdate = true;
     }
-  }, [monitorIndex]);
+  }, [monitorIndex, evictOldestTextures]);
 
   // 1. Fetch photos from API
   const fetchPhotos = useCallback(async (silent = false) => {
@@ -933,9 +958,21 @@ export default function WallpaperView() {
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x07090e, 1.0);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.15;
     container.appendChild(renderer.domElement);
+
+    renderer.domElement.addEventListener('webglcontextlost', (event) => {
+      event.preventDefault();
+      console.warn('[WallpaperView] WebGL context lost! Pausing render loop to prevent white screen.');
+      if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
+    });
+
+    renderer.domElement.addEventListener('webglcontextrestored', () => {
+      console.log('[WallpaperView] WebGL context restored! Auto-recovering wallpaper...');
+      window.location.reload();
+    });
 
     // Lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
@@ -1294,25 +1331,36 @@ export default function WallpaperView() {
             })
           );
         } else {
-          let imageTexture;
-          if (textureCacheRef.current.has(photo.id)) {
-            imageTexture = textureCacheRef.current.get(photo.id);
-          } else {
-            imageTexture = textureLoader.load(photo.image_url, (tex) => {
-              tex.colorSpace = THREE.SRGBColorSpace;
-              tex.generateMipmaps = true;
-              tex.minFilter = THREE.LinearMipmapLinearFilter;
-              textureCacheRef.current.set(photo.id, tex);
-            });
-          }
+          const placeholderTex = createPlaceholderTexture(i, monitorIndex);
+          const mat = new THREE.MeshStandardMaterial({
+            map: placeholderTex,
+            roughness: 0.2,
+            metalness: 0.1
+          });
+          newMaterials.push(mat);
 
-          newMaterials.push(
-            new THREE.MeshStandardMaterial({
-              map: imageTexture,
-              roughness: 0.2,
-              metalness: 0.1
-            })
-          );
+          if (textureCacheRef.current.has(photo.id)) {
+            mat.map = textureCacheRef.current.get(photo.id);
+            mat.needsUpdate = true;
+          } else {
+            textureLoader.load(
+              photo.image_url,
+              (tex) => {
+                tex.colorSpace = THREE.SRGBColorSpace;
+                tex.generateMipmaps = true;
+                tex.minFilter = THREE.LinearMipmapLinearFilter;
+                textureCacheRef.current.set(photo.id, tex);
+                evictOldestTextures();
+                mat.map = tex;
+                mat.needsUpdate = true;
+              },
+              undefined,
+              () => {
+                mat.map = placeholderTex;
+                mat.needsUpdate = true;
+              }
+            );
+          }
         }
       } else {
         const placeholderTex = createPlaceholderTexture(i, monitorIndex);
